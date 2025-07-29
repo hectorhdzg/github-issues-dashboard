@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: github-issues-dashboard
+metadata:
+  template: github-issues-dashboard@0.0.1-beta
+infra:
+  provider: bicep
+services:
+  dashboard-app:
+    project: ./
+    host: appservice
+    language: python

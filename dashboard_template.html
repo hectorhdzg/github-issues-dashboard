@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Monitor Scripting SDKs GitHub Issues</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            text-align: center;
+            position: sticky;
+            top: 0;
+            z-index: 200;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .header h1:hover {
+            transform: scale(1.02);
+            text-shadow: 0 2px 10px rgba(255,255,255,0.3);
+        }
+        
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+        
+        .navigation {
+            background: white;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 150px;
+            z-index: 150;
+        }
+        
+        .nav-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #2d3748;
+        }
+        
+        .nav-tree {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        
+        .nav-group {
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        .nav-group-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: #f7fafc;
+            cursor: pointer;
+            transition: background 0.2s;
+            user-select: none;
+        }
+        
+        .nav-group-header:hover {
+            background: #edf2f7;
+        }
+        
+        .nav-group-title {
+            font-weight: 600;
+            color: #4a5568;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .nav-group-icon {
+            font-size: 0.8rem;
+            transition: transform 0.2s;
+        }
+        
+        .nav-group-count {
+            background: #e2e8f0;
+            color: #4a5568;
+            padding: 0.2rem 0.5rem;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .nav-toggle {
+            background: none;
+            border: none;
+            font-size: 1rem;
+            cursor: pointer;
+            color: #4a5568;
+            transition: transform 0.2s;
+        }
+        
+        .nav-group.expanded .nav-toggle {
+            transform: rotate(90deg);
+        }
+        
+        .nav-links {
+            display: none;
+            padding: 0.5rem;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+        }
+        
+        .nav-group.expanded .nav-links {
+            display: block;
+        }
+        
+        .nav-links-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.3rem;
+        }
+        
+        .nav-link {
+            padding: 0.4rem 0.8rem;
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #4a5568;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .nav-link:hover {
+            background: #667eea;
+            color: white;
+            transform: translateY(-1px);
+        }
+        
+        .nav-link .issue-count-badge {
+            background: #e2e8f0;
+            color: #4a5568;
+            padding: 0.1rem 0.3rem;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            min-width: 20px;
+            text-align: center;
+        }
+        
+        .nav-link.active {
+            background: #667eea !important;
+            color: white !important;
+            transform: translateY(-1px);
+        }
+        
+        .nav-link.active .issue-count-badge {
+            background: rgba(255,255,255,0.2) !important;
+            color: white !important;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            color: #666;
+            margin-top: 0.5rem;
+        }
+        
+        .repo-section {
+            background: white;
+            margin-bottom: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            overflow: hidden;
+            display: none;
+        }
+        
+        .repo-section.active {
+            display: block;
+        }
+        
+        .repo-header {
+            background: #2d3748;
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .repo-header:hover {
+            background: #4a5568;
+        }
+        
+        .repo-header.active {
+            background: #667eea;
+        }
+        
+        .repo-content {
+            display: block;
+        }
+        
+        .repo-name {
+            font-size: 1.3rem;
+            font-weight: 600;
+        }
+        
+        .issue-count {
+            background: #667eea;
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }
+        
+        .controls {
+            padding: 1rem 2rem;
+            background: #f7fafc;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .search-box, .filter-select {
+            padding: 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 5px;
+            font-size: 0.9rem;
+        }
+        
+        .search-box {
+            min-width: 300px;
+            flex: 1;
+        }
+        
+        .issues-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .issues-table th {
+            background: #4a5568;
+            color: white;
+            padding: 1rem;
+            text-align: left;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+        
+        .issues-table td {
+            padding: 1rem;
+            border-bottom: 1px solid #e2e8f0;
+            vertical-align: top;
+        }
+        
+        .issues-table tbody tr:hover {
+            background-color: #f7fafc;
+        }
+        
+        .issue-title {
+            font-weight: 500;
+            max-width: 400px;
+        }
+        
+        .issue-title a {
+            color: #2d3748;
+            text-decoration: none;
+        }
+        
+        .issue-title a:hover {
+            color: #667eea;
+            text-decoration: underline;
+        }
+        
+        .issue-number {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .assignee {
+            background: #e2e8f0;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            display: inline-block;
+        }
+        
+        .pr-link {
+            background: #48bb78;
+            color: white;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .pr-link:hover {
+            background: #38a169;
+        }
+        
+        .triage-checkbox {
+            transform: scale(1.2);
+            cursor: pointer;
+        }
+        
+        .priority-select {
+            padding: 0.3rem 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            min-width: 120px;
+        }
+        
+        .save-btn {
+            background: #48bb78;
+            color: white;
+            border: none;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            min-width: 80px;
+            display: none;
+        }
+        
+        .save-btn:hover {
+            background: #38a169;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(72, 187, 120, 0.4);
+        }
+        
+        .save-btn:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .save-btn.saving {
+            background: #4299e1;
+            animation: pulse 1.5s infinite;
+        }
+        
+        .save-btn.success {
+            background: #48bb78;
+            animation: none;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        
+        @keyframes fadeIn {
+            0% { 
+                opacity: 0; 
+                transform: scale(0.8); 
+            }
+            100% { 
+                opacity: 1; 
+                transform: scale(1); 
+            }
+        }
+        
+        .actions-cell {
+            position: relative;
+            min-width: 120px;
+        }
+        
+        .save-feedback {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #48bb78;
+            color: white;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            opacity: 0;
+            transition: all 0.3s ease;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
+        .save-feedback.show {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.1);
+        }
+        
+        .row-dirty {
+            background-color: #fef5e7 !important;
+        }
+        
+        .recent { background-color: #c6f6d5 !important; }
+        .medium { background-color: #fefcbf !important; }
+        .old { background-color: #fed7d7 !important; }
+        .stale { background-color: #e9d8fd !important; }
+        .unknown { background-color: #f7fafc !important; }
+        
+        .legend {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin: 1rem 0;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+        
+        .priority-select, .triage-checkbox {
+            padding: 0.3rem;
+            border: 1px solid #d1d5db;
+            border-radius: 3px;
+        }
+        
+        .no-issues {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            background: #f7fafc;
+            border-top: 1px solid #e2e8f0;
+        }
+        
+        .pagination-info {
+            color: #4a5568;
+            font-size: 0.9rem;
+        }
+        
+        .pagination-controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        
+        .pagination-btn {
+            padding: 0.5rem 1rem;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+        
+        .pagination-btn:hover:not(:disabled) {
+            background: #5a67d8;
+        }
+        
+        .pagination-btn:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+        }
+        
+        .page-input {
+            width: 60px;
+            padding: 0.3rem;
+            border: 1px solid #d1d5db;
+            border-radius: 3px;
+            text-align: center;
+            font-size: 0.9rem;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .search-box {
+                min-width: auto;
+            }
+            
+            .issues-table {
+                font-size: 0.8rem;
+            }
+            
+            .issues-table th,
+            .issues-table td {
+                padding: 0.5rem;
+            }
+            
+            .pagination {
+                flex-direction: column;
+                gap: 1rem;
+                text-align: center;
+            }
+            
+            .pagination-controls {
+                justify-content: center;
+            }
+        }
+    </style>
+    <script>
+        // Pagination state for each table
+        const pageStates = {};
+        const itemsPerPage = 10;
+        let activeRepoId = null;
+        
+        function initializePagination(repoId, totalItems) {
+            if (!pageStates[repoId]) {
+                pageStates[repoId] = {
+                    currentPage: 1,
+                    totalItems: totalItems,
+                    totalPages: Math.ceil(totalItems / itemsPerPage),
+                    filteredItems: totalItems
+                };
+            }
+            showPage(repoId, 1);
+        }
+        
+        function showPage(repoId, page) {
+            const table = document.getElementById('table-' + repoId);
+            const rows = Array.from(table.getElementsByTagName('tr')).slice(1); // Skip header
+            const state = pageStates[repoId];
+            
+            // Filter visible rows first
+            const visibleRows = rows.filter(row => row.style.display !== 'none');
+            state.filteredItems = visibleRows.length;
+            state.totalPages = Math.ceil(state.filteredItems / itemsPerPage);
+            
+            // Ensure page is within bounds
+            page = Math.max(1, Math.min(page, state.totalPages));
+            state.currentPage = page;
+            
+            // Hide all rows first
+            rows.forEach(row => {
+                if (row.style.display !== 'none') {
+                    row.classList.add('pagination-hidden');
+                }
+            });
+            
+            // Show only current page rows
+            const startIndex = (page - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            
+            visibleRows.slice(startIndex, endIndex).forEach(row => {
+                row.classList.remove('pagination-hidden');
+            });
+            
+            updatePaginationControls(repoId);
+        }
+        
+        function updatePaginationControls(repoId) {
+            const state = pageStates[repoId];
+            const controls = document.getElementById('pagination-' + repoId);
+            
+            if (state.totalPages <= 1) {
+                controls.style.display = 'none';
+                return;
+            } else {
+                controls.style.display = 'flex';
+            }
+            
+            // Update info
+            const startItem = (state.currentPage - 1) * itemsPerPage + 1;
+            const endItem = Math.min(state.currentPage * itemsPerPage, state.filteredItems);
+            document.getElementById('page-info-' + repoId).textContent = 
+                `Showing ${startItem}-${endItem} of ${state.filteredItems} issues`;
+            
+            // Update buttons
+            document.getElementById('prev-btn-' + repoId).disabled = state.currentPage === 1;
+            document.getElementById('next-btn-' + repoId).disabled = state.currentPage === state.totalPages;
+            
+            // Update page input
+            const pageInput = document.getElementById('page-input-' + repoId);
+            pageInput.value = state.currentPage;
+            pageInput.max = state.totalPages;
+            
+            // Update page counter
+            document.getElementById('page-counter-' + repoId).textContent = 
+                `Page ${state.currentPage} of ${state.totalPages}`;
+        }
+        
+        function goToPage(repoId, page) {
+            showPage(repoId, parseInt(page));
+        }
+        
+        function nextPage(repoId) {
+            const state = pageStates[repoId];
+            if (state.currentPage < state.totalPages) {
+                showPage(repoId, state.currentPage + 1);
+            }
+        }
+        
+        function prevPage(repoId) {
+            const state = pageStates[repoId];
+            if (state.currentPage > 1) {
+                showPage(repoId, state.currentPage - 1);
+            }
+        }
+        
+        function filterTable(repoId, searchTerm) {
+            const table = document.getElementById('table-' + repoId);
+            const rows = table.getElementsByTagName('tr');
+            
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                const text = row.textContent.toLowerCase();
+                if (text.includes(searchTerm.toLowerCase())) {
+                    row.style.display = '';
+                    row.classList.remove('pagination-hidden');
+                } else {
+                    row.style.display = 'none';
+                    row.classList.add('pagination-hidden');
+                }
+            }
+            
+            // Reset to page 1 after filtering
+            showPage(repoId, 1);
+        }
+        
+        function toggleNavGroup(groupId) {
+            const group = document.getElementById(groupId);
+            group.classList.toggle('expanded');
+        }
+        
+        function setActiveRepo(repoId) {
+            // Hide all repo sections and remove active class
+            document.querySelectorAll('.repo-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.querySelectorAll('.repo-header').forEach(header => {
+                header.classList.remove('active');
+            });
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            
+            // Hide welcome section
+            const welcomeSection = document.getElementById('welcome-section');
+            if (welcomeSection) {
+                welcomeSection.style.display = 'none';
+            }
+            
+            // Show the selected repo section and mark header as active
+            const repoSection = document.getElementById('repo-' + repoId);
+            const header = document.querySelector(`#repo-${repoId} .repo-header`);
+            const navLink = document.querySelector(`[onclick="setActiveRepo('${repoId}')"]`);
+            
+            if (repoSection && header) {
+                repoSection.classList.add('active');
+                header.classList.add('active');
+                if (navLink) {
+                    navLink.classList.add('active');
+                }
+                activeRepoId = repoId;
+                
+                // Update URL with selected repo parameter
+                const repoName = repoSection.getAttribute('data-repo-name') || repoId.replace(/-/g, '/');
+                const newUrl = new URL(window.location);
+                newUrl.searchParams.set('repo', repoName);
+                window.history.replaceState({}, '', newUrl);
+                
+                // Update active repo indicator
+                const indicator = document.getElementById('active-repo-indicator');
+                const repoNameSpan = document.getElementById('active-repo-name');
+                const repoDisplayName = header.querySelector('.repo-name') ? header.querySelector('.repo-name').textContent : header.querySelector('a').textContent;
+                if (indicator && repoNameSpan) {
+                    indicator.style.display = 'block';
+                    repoNameSpan.textContent = repoDisplayName;
+                }
+                
+                // Initialize pagination for the active repo
+                const table = document.getElementById('table-' + repoId);
+                if (table) {
+                    const rows = table.getElementsByTagName('tr');
+                    const totalIssues = rows.length - 1; // Subtract header row
+                    initializePagination(repoId, totalIssues);
+                }
+                
+                // Scroll to the repo section
+                repoSection.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'start' 
+                });
+            }
+        }
+        
+        function toggleSection(repoId) {
+            // Always use setActiveRepo for consistent behavior
+            setActiveRepo(repoId);
+        }
+        
+        function scrollToRepo(repoId) {
+            setActiveRepo(repoId);
+        }
+        
+        function clearRepoSelection() {
+            // Hide all repo sections and remove active class
+            document.querySelectorAll('.repo-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.querySelectorAll('.repo-header').forEach(header => {
+                header.classList.remove('active');
+            });
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            
+            // Hide active repo indicator
+            const indicator = document.getElementById('active-repo-indicator');
+            if (indicator) {
+                indicator.style.display = 'none';
+            }
+            
+            // Show welcome section
+            const welcomeSection = document.getElementById('welcome-section');
+            if (welcomeSection) {
+                welcomeSection.style.display = 'block';
+            }
+            
+            // Clear URL parameter
+            const newUrl = new URL(window.location);
+            newUrl.searchParams.delete('repo');
+            window.history.replaceState({}, '', newUrl);
+            
+            activeRepoId = null;
+        }
+        
+        // No auto-selection of repositories - user must choose manually
+        document.addEventListener('DOMContentLoaded', function() {
+            // Hide the active repo indicator initially
+            const indicator = document.getElementById('active-repo-indicator');
+            if (indicator) {
+                indicator.style.display = 'none';
+            }
+            
+            // Check if there's a selected repo from query parameter
+            const selectedRepo = '{selected_repo}';
+            if (selectedRepo && selectedRepo.trim() !== '') {
+                // Convert repo name to repo ID format
+                const selectedRepoId = selectedRepo.replace('/', '-').replace(/\./g, '-');
+                
+                // Try to find and select the repository
+                const repoSection = document.getElementById('repo-' + selectedRepoId);
+                if (repoSection) {
+                    setActiveRepo(selectedRepoId);
+                    return; // Exit early if we found and selected the repo
+                }
+            }
+            
+            // Ensure welcome section is visible initially if no valid repo was selected
+            const welcomeSection = document.getElementById('welcome-section');
+            if (welcomeSection) {
+                welcomeSection.style.display = 'block';
+            }
+        });
+        
+        // Functions for handling editable fields
+        function markDirty(element) {
+            const row = element.closest('tr');
+            row.classList.add('row-dirty');
+            const saveBtn = row.querySelector('.save-btn');
+            if (saveBtn) {
+                saveBtn.style.display = 'inline-block';
+                saveBtn.textContent = 'Save Changes';
+                saveBtn.classList.remove('saving', 'success');
+                
+                // Add a subtle animation to draw attention
+                saveBtn.style.animation = 'fadeIn 0.3s ease';
+                setTimeout(() => {
+                    saveBtn.style.animation = '';
+                }, 300);
+            }
+        }
+        
+        function saveIssueChanges(button) {
+            console.log('🔄 Save button clicked');
+            const row = button.closest('tr');
+            const repo = row.dataset.repo;
+            const number = row.dataset.number;
+            const triage = row.querySelector('.triage-checkbox').checked;
+            const priority = row.querySelector('.priority-select').value;
+            
+            console.log('📝 Saving data:', { repo, number, triage, priority });
+            
+            // Enhanced visual feedback during save
+            button.disabled = true;
+            button.textContent = '💾 Saving...';
+            button.classList.add('saving');
+            
+            // Create and show feedback element
+            const actionsCell = button.closest('td');
+            let feedback = actionsCell.querySelector('.save-feedback');
+            if (!feedback) {
+                feedback = document.createElement('div');
+                feedback.className = 'save-feedback';
+                actionsCell.appendChild(feedback);
+            }
+            
+            fetch('/api/update_issue', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    repo: repo,
+                    number: parseInt(number),
+                    triage: triage,
+                    priority: parseInt(priority)
+                })
+            })
+            .then(response => {
+                console.log('📨 Response received:', response.status);
+                return response.json();
+            })
+            .then(data => {
+                console.log('📊 Response data:', data);
+                if (data.status === 'success') {
+                    // Success animation
+                    row.classList.remove('row-dirty');
+                    button.classList.remove('saving');
+                    button.classList.add('success');
+                    button.textContent = '✅ Saved!';
+                    button.disabled = false;
+                    
+                    // Show success feedback
+                    feedback.textContent = '✓ Changes saved!';
+                    feedback.style.background = '#48bb78';
+                    feedback.classList.add('show');
+                    
+                    // Hide feedback and button after delay
+                    setTimeout(() => {
+                        feedback.classList.remove('show');
+                        setTimeout(() => {
+                            button.style.display = 'none';
+                            button.textContent = 'Save Changes';
+                            button.classList.remove('success');
+                        }, 300);
+                    }, 2000);
+                } else {
+                    // Error state
+                    button.classList.remove('saving');
+                    button.disabled = false;
+                    button.textContent = '❌ Error';
+                    button.style.background = '#e53e3e';
+                    
+                    feedback.textContent = '❌ Save failed';
+                    feedback.style.background = '#e53e3e';
+                    feedback.classList.add('show');
+                    
+                    setTimeout(() => {
+                        feedback.classList.remove('show');
+                        button.textContent = 'Save Changes';
+                        button.style.background = '';
+                    }, 3000);
+                    
+                    alert('Error saving changes: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('❌ Error:', error);
+                
+                // Error state
+                button.classList.remove('saving');
+                button.disabled = false;
+                button.textContent = '❌ Error';
+                button.style.background = '#e53e3e';
+                
+                feedback.textContent = '❌ Network error';
+                feedback.style.background = '#e53e3e';
+                feedback.classList.add('show');
+                
+                setTimeout(() => {
+                    feedback.classList.remove('show');
+                    button.textContent = 'Save Changes';
+                    button.style.background = '';
+                }, 3000);
+                
+                alert('Error saving changes: ' + error.message);
+            });
+        }
+    </script>
+    <style>
+        .pagination-hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 onclick="clearRepoSelection()">🐛 Azure Monitor Scripting SDKs GitHub Issues</h1>
+            {database_info}
+        </div>
+        
+        <div class="navigation">
+            <div id="active-repo-indicator" style="background: #e6fffa; border: 1px solid #38b2ac; padding: 0.5rem 1rem; border-radius: 5px; margin-bottom: 1rem; color: #234e52; font-size: 0.9rem; display: none;">
+            </div>
+            <div class="nav-tree">
+                <div class="nav-group" id="nodejs-group">
+                    <div class="nav-group-header" onclick="toggleNavGroup('nodejs-group')">
+                        <div class="nav-group-title">
+                            <span class="nav-group-icon">📦</span>
+                            Node.js / Server-side JavaScript
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="nav-group-count" id="nodejs-count">0</span>
+                            <button class="nav-toggle">▶</button>
+                        </div>
+                    </div>
+                    <div class="nav-links">
+                        <div class="nav-links-grid">
+                            {nodejs_nav_links}
+                        </div>
+                    </div>
+                </div>
+                <div class="nav-group" id="python-group">
+                    <div class="nav-group-header" onclick="toggleNavGroup('python-group')">
+                        <div class="nav-group-title">
+                            <span class="nav-group-icon">🐍</span>
+                            Python
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="nav-group-count" id="python-count">0</span>
+                            <button class="nav-toggle">▶</button>
+                        </div>
+                    </div>
+                    <div class="nav-links">
+                        <div class="nav-links-grid">
+                            {python_nav_links}
+                        </div>
+                    </div>
+                </div>
+                <div class="nav-group" id="browser-group">
+                    <div class="nav-group-header" onclick="toggleNavGroup('browser-group')">
+                        <div class="nav-group-title">
+                            <span class="nav-group-icon">🌐</span>
+                            Browser JavaScript / Client-side
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="nav-group-count" id="browser-count">0</span>
+                            <button class="nav-toggle">▶</button>
+                        </div>
+                    </div>
+                    <div class="nav-links">
+                        <div class="nav-links-grid">
+                            {browser_nav_links}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Welcome section shown when no repository is selected -->
+        <div class="welcome-section" id="welcome-section">
+            <div style="background: white; border-radius: 10px; padding: 3rem; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.1); margin-bottom: 2rem;">
+                <h2 style="color: #667eea; margin-bottom: 1rem; font-size: 2rem;">🚀 Welcome to the GitHub Issues Dashboard</h2>
+                <p style="color: #666; font-size: 1.1rem; margin-bottom: 2rem; max-width: 600px; margin-left: auto; margin-right: auto;">
+                    Select a repository from the navigation above to view its GitHub issues. You can browse issues by language category and manage triage status and priorities.
+                </p>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 2rem;">
+                    <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #667eea;">
+                        <h3 style="color: #2d3748; margin-bottom: 0.5rem;">📦 Node.js</h3>
+                        <p style="color: #666; font-size: 0.9rem;">Server-side JavaScript repositories</p>
+                    </div>
+                    <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #48bb78;">
+                        <h3 style="color: #2d3748; margin-bottom: 0.5rem;">🐍 Python</h3>
+                        <p style="color: #666; font-size: 0.9rem;">Python SDK repositories</p>
+                    </div>
+                    <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #ed8936;">
+                        <h3 style="color: #2d3748; margin-bottom: 0.5rem;">🌐 Browser JavaScript</h3>
+                        <p style="color: #666; font-size: 0.9rem;">Client-side JavaScript repositories</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        {repo_sections}
+        
+        {group_counts_script}
+    </div>
+</body>
+</html>

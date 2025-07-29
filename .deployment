@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "defaultProvider": "kudu",
+  "deploymentPath": "/home/site/wwwroot",
+  "appType": "Python",
+  "virtualEnvironment": {
+    "pythonVersion": "3.11",
+    "requirements": "requirements.txt"
+  },
+  "startup": {
+    "command": "gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 300 app:app"
+  },
+  "environmentVariables": {
+    "FLASK_ENV": "production",
+    "PYTHONPATH": "/home/site/wwwroot",
+    "SCM_DO_BUILD_DURING_DEPLOYMENT": "true"
+  }
+}
