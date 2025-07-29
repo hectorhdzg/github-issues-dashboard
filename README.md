@@ -61,14 +61,16 @@ The dashboard currently monitors these Azure Monitor and OpenTelemetry repositor
    pip install -r requirements.txt
    ```
 
-3. **Set environment variables**:
+3. **Set environment variables** (optional):
    ```bash
-   # Windows (PowerShell)
+   # Windows (PowerShell) - Optional for better performance
    $env:GITHUB_TOKEN="your_github_token_here"
    
-   # Linux/Mac
+   # Linux/Mac - Optional for better performance  
    export GITHUB_TOKEN="your_github_token_here"
    ```
+   
+   **Note**: GitHub token is optional. The app works in unauthenticated mode but with lower rate limits.
 
 4. **Run the application**:
    ```bash
@@ -76,15 +78,31 @@ The dashboard currently monitors these Azure Monitor and OpenTelemetry repositor
    ```
 
 5. **Access the dashboard**:
-   Open `http://localhost:5000` in your browser
+   - **Main Dashboard**: `http://localhost:5000`
+   - **Sync Management**: `http://localhost:5000/sync`
+   - **Health Check**: `http://localhost:5000/health`
 
-### GitHub Token Setup
+### GitHub Token Setup (Optional but Recommended)
 
+**Note**: The dashboard can run without a GitHub token in unauthenticated mode, but adding a token provides better performance and data coverage.
+
+**Benefits of GitHub Token**:
+- **Higher Rate Limits**: 5,000 vs 60 requests per hour
+- **More Data**: Fetch up to 500 issues per repository vs 200
+- **Better Reliability**: Reduced chance of rate limit errors
+
+**Setup Steps**:
 1. Go to GitHub Settings → Developer settings → Personal access tokens
 2. Generate a new token with these permissions:
-   - `repo` (Full control of private repositories)
-   - `read:org` (Read org and team membership)
+   - `repo` (Full control of private repositories) - *for private repos only*
+   - `public_repo` (Access public repositories) - *sufficient for public repos*
+   - `read:org` (Read org and team membership) - *optional*
 3. Copy the token and set it as the `GITHUB_TOKEN` environment variable
+
+**Token Permissions Explained**:
+- **Public repositories only**: Use `public_repo` scope
+- **Private repositories**: Use full `repo` scope
+- **Organization repositories**: Add `read:org` for better access
 
 ## ☁️ Azure Deployment
 
@@ -112,10 +130,12 @@ The dashboard currently monitors these Azure Monitor and OpenTelemetry repositor
    azd up
    ```
 
-4. **Configure GitHub token** (in Azure portal):
+4. **Configure GitHub token** (optional but recommended):
    - Go to your App Service → Configuration → Application settings
    - Add `GITHUB_TOKEN` with your GitHub personal access token
    - Restart the app service
+   
+   **Note**: Without a token, the app runs in unauthenticated mode with 60 requests/hour limit.
 
 ### Option 2: Manual Azure Deployment
 
@@ -136,10 +156,13 @@ The dashboard currently monitors these Azure Monitor and OpenTelemetry repositor
 
 ### Environment Variables
 
-The following environment variables are required for production:
+The following environment variables can be configured:
 
-- `GITHUB_TOKEN`: GitHub Personal Access Token for API access
-- `APPLICATIONINSIGHTS_CONNECTION_STRING`: (Optional) Azure Application Insights connection string
+**Required**: None (app works without any environment variables)
+
+**Optional**:
+- `GITHUB_TOKEN`: GitHub Personal Access Token for enhanced API access (5000 vs 60 requests/hour)
+- `APPLICATIONINSIGHTS_CONNECTION_STRING`: Azure Application Insights connection string for telemetry
 
 ## 📱 Usage
 
@@ -159,9 +182,72 @@ The following environment variables are required for production:
 
 ### Sync Management
 
-- **Automatic Sync**: Runs every 24 hours at 2:00 AM UTC
-- **Manual Sync**: Access `/sync` endpoint to trigger manual synchronization
-- **Sync Status**: View real-time sync status at `/sync/status`
+The dashboard includes a comprehensive sync management interface at `/sync` for monitoring and controlling data synchronization:
+
+#### Accessing Sync Management
+- **URL**: `http://localhost:5000/sync` (local) or `https://your-app.azurewebsites.net/sync` (production)
+- **Auto-refresh**: Page automatically refreshes every 30 seconds
+
+#### Sync Modes
+
+**🔑 Authenticated Mode** (with GITHUB_TOKEN):
+- **Rate Limit**: 5,000 requests per hour
+- **Data Coverage**: Up to 5 pages per repository (~500 issues each)
+- **Recommended**: For comprehensive data collection
+
+**📡 Unauthenticated Mode** (without GITHUB_TOKEN):
+- **Rate Limit**: 60 requests per hour
+- **Data Coverage**: Up to 2 pages per repository (~200 issues each)
+- **Safe for Daily Sync**: 28 total requests across 14 repositories
+
+#### Sync Controls
+
+1. **🚀 Trigger Manual Sync**: Start immediate synchronization
+2. **🔄 Refresh**: Reload sync status
+3. **🏠 Back to Dashboard**: Return to main dashboard
+
+#### Sync Status Information
+
+- **Authentication Status**: Shows current API access mode and rate limits
+- **Last Sync**: Timestamp of most recent successful sync
+- **Next Scheduled Sync**: Automatic sync occurs daily at 2:00 AM UTC
+- **Total Issues Synced**: Count of issues processed in last sync
+- **Recent Errors**: List of any sync failures with detailed messages
+- **Repository Status**: Shows all configured repositories
+
+#### Understanding Sync Results
+
+- **✅ Success**: All repositories synced successfully
+- **⚠️ Partial**: Some repositories failed (check error list)
+- **❌ Failed**: Sync encountered critical errors
+- **🔄 In Progress**: Sync currently running (button disabled)
+
+#### Troubleshooting Sync Issues
+
+**Rate Limit Exceeded**:
+```
+❌ Rate limit exceeded for owner/repo. Try again later or add GITHUB_TOKEN.
+```
+- **Solution**: Wait for rate limit reset or add GitHub token
+
+**Network Errors**:
+```
+❌ Network error fetching owner/repo: Connection timeout
+```
+- **Solution**: Check internet connectivity and GitHub status
+
+**Authentication Issues**:
+```
+❌ Forbidden error for owner/repo: Bad credentials
+```
+- **Solution**: Verify GitHub token is valid and has required permissions
+
+#### Automatic Scheduling
+
+- **Frequency**: Every 24 hours
+- **Time**: 2:00 AM UTC (avoids peak hours)
+- **Background**: Runs automatically without user intervention
+- **Smart Delays**: Built-in delays between repositories to respect rate limits
 
 ## 🔍 PR/Issue Detection
 

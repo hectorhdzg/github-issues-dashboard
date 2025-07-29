@@ -188,7 +188,6 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
           name: 'GITHUB_TOKEN'
           value: githubToken
         }
-        }
       ]
     }
   }
@@ -230,8 +229,10 @@ resource appServiceDiagnosticSettings 'Microsoft.Insights/diagnosticSettings@202
 // Required outputs for AZD deployment
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
+output AZURE_SUBSCRIPTION_ID string = subscription().subscriptionId
 output REACT_APP_API_BASE_URL string = 'https://${appService.properties.defaultHostName}'
 output REACT_APP_WEB_BASE_URL string = 'https://${appService.properties.defaultHostName}'
+output AZURE_RESOURCE_GROUP string = resourceGroup().name
 output SERVICE_DASHBOARD_APP_ENDPOINT_URL string = 'https://${appService.properties.defaultHostName}'
 output SERVICE_DASHBOARD_APP_IDENTITY_PRINCIPAL_ID string = managedIdentity.properties.principalId
 output SERVICE_DASHBOARD_APP_NAME string = appService.name

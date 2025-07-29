@@ -16,6 +16,9 @@
     },
     "flaskDebug": {
       "value": "false"
+    },
+    "githubToken": {
+      "value": "${GITHUB_TOKEN}"
     }
   }
 }

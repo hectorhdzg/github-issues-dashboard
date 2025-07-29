@@ -105,11 +105,13 @@ def get_github_headers():
 
 def fetch_github_issues(repo, per_page=100):
     """Fetch issues from a GitHub repository"""
-    if not GITHUB_TOKEN:
-        print(f"⚠️ No GitHub token configured, skipping sync for {repo}")
-        return []
-    
     print(f"🔄 Fetching issues from {repo}...")
+    
+    # Check rate limit status before starting
+    if not GITHUB_TOKEN:
+        print(f"📡 Using unauthenticated GitHub API for {repo} (60 requests/hour limit)")
+    else:
+        print(f"� Using authenticated GitHub API for {repo} (5000 requests/hour limit)")
     
     all_issues = []
     page = 1
@@ -127,6 +129,14 @@ def fetch_github_issues(repo, per_page=100):
             }
             
             response = requests.get(url, headers=get_github_headers(), params=params)
+            
+            # Check rate limit headers
+            rate_limit_remaining = response.headers.get('X-RateLimit-Remaining', 'unknown')
+            rate_limit_reset = response.headers.get('X-RateLimit-Reset', 'unknown')
+            
+            if rate_limit_remaining != 'unknown':
+                print(f"  🚦 Rate limit remaining: {rate_limit_remaining}")
+            
             response.raise_for_status()
             
             issues = response.json()
@@ -141,14 +151,36 @@ def fetch_github_issues(repo, per_page=100):
             
             page += 1
             
-            # Stop after 5 pages to avoid rate limiting (500 issues max per repo)
-            if page > 5:
-                print(f"  ⚠️ Reached page limit for {repo}")
+            # Adjust page limit based on authentication status to respect rate limits
+            if not GITHUB_TOKEN:
+                # Unauthenticated: limit to 2 pages per repo to stay within 60 req/hour
+                # With 14 repos, that's 28 requests, leaving room for other API calls
+                max_pages = 2
+            else:
+                # Authenticated: can use more pages
+                max_pages = 5
+            
+            if page > max_pages:
+                print(f"  ⚠️ Reached page limit ({max_pages}) for {repo}")
                 break
                 
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 403:
+                rate_limit_remaining = e.response.headers.get('X-RateLimit-Remaining', '0')
+                if rate_limit_remaining == '0':
+                    print(f"❌ Rate limit exceeded for {repo}. Try again later or add GITHUB_TOKEN.")
+                    sync_status['errors'].append(f"Rate limit exceeded for {repo}")
+                else:
+                    print(f"❌ Forbidden error for {repo}: {e}")
+                    sync_status['errors'].append(f"Forbidden error for {repo}: {str(e)}")
+            else:
+                print(f"❌ HTTP error fetching issues from {repo}: {e}")
+                sync_status['errors'].append(f"HTTP error fetching {repo}: {str(e)}")
+            break
+            
         except requests.exceptions.RequestException as e:
-            print(f"❌ Error fetching issues from {repo}: {e}")
-            sync_status['errors'].append(f"Error fetching {repo}: {str(e)}")
+            print(f"❌ Network error fetching issues from {repo}: {e}")
+            sync_status['errors'].append(f"Network error fetching {repo}: {str(e)}")
             break
             
         except Exception as e:
@@ -243,11 +275,14 @@ def sync_all_repositories():
     start_time = datetime.now(timezone.utc)
     
     try:
-        for repo in REPOSITORIES:
+        # Add delay between repos to respect rate limits, especially for unauthenticated requests
+        delay_between_repos = 2 if not GITHUB_TOKEN else 1
+        
+        for i, repo in enumerate(REPOSITORIES):
             if not sync_status['sync_in_progress']:  # Check if sync was cancelled
                 break
                 
-            print(f"\n📋 Syncing repository: {repo}")
+            print(f"\n📋 Syncing repository {i+1}/{len(REPOSITORIES)}: {repo}")
             
             # Fetch issues from GitHub
             issues = fetch_github_issues(repo)
@@ -256,8 +291,10 @@ def sync_all_repositories():
             updated_count = update_database_with_issues(repo, issues)
             total_updated += updated_count
             
-            # Small delay to be respectful to GitHub API
-            time.sleep(1)
+            # Add delay between repositories to be respectful to GitHub API
+            if i < len(REPOSITORIES) - 1:  # Don't delay after the last repo
+                print(f"  ⏱️ Waiting {delay_between_repos} seconds before next repository...")
+                time.sleep(delay_between_repos)
         
         sync_status['last_sync'] = datetime.now(timezone.utc).isoformat()
         sync_status['total_synced'] = total_updated
@@ -266,6 +303,8 @@ def sync_all_repositories():
         
         if sync_status['errors']:
             print(f"⚠️ Encountered {len(sync_status['errors'])} errors during sync")
+            for error in sync_status['errors']:
+                print(f"   • {error}")
         
     except Exception as e:
         print(f"❌ Critical error during sync: {e}")
@@ -282,12 +321,11 @@ def sync_all_repositories():
 
 def start_sync_scheduler():
     """Start the background sync scheduler"""
-    if not GITHUB_TOKEN:
-        print("⚠️ No GITHUB_TOKEN found, scheduled sync disabled")
-        print("💡 Set GITHUB_TOKEN environment variable to enable automatic sync")
-        return
+    auth_status = "authenticated" if GITHUB_TOKEN else "unauthenticated"
+    rate_limit = "5000 requests/hour" if GITHUB_TOKEN else "60 requests/hour"
     
-    print("⏰ Starting sync scheduler (every 24 hours at 2:00 AM UTC)")
+    print(f"⏰ Starting sync scheduler (every 24 hours at 2:00 AM UTC)")
+    print(f"🔑 GitHub API access: {auth_status} ({rate_limit})")
     
     try:
         # Schedule daily sync at 2:00 AM UTC to avoid peak hours
@@ -304,7 +342,7 @@ def start_sync_scheduler():
                 
                 if not last_fetch:
                     print("📊 No sync data found, but skipping initial sync during startup")
-                    print("💡 Visit /sync to trigger manual sync or set up GitHub token")
+                    print("💡 Visit /sync to trigger manual sync")
                 else:
                     last_fetch_time = datetime.fromisoformat(last_fetch.replace('Z', '+00:00'))
                     hours_since = (datetime.now(timezone.utc) - last_fetch_time).total_seconds() / 3600
@@ -951,9 +989,13 @@ def sync_page():
         function updateStatusDisplay(data) {{
             let html = '';
             
-            if (!data.sync_enabled) {{
-                html += '<div class="status warning">⚠️ GitHub sync is disabled. No GITHUB_TOKEN configured.</div>';
-            }} else if (data.sync_in_progress) {{
+            if (!data.authenticated) {{
+                html += '<div class="status warning">⚠️ Running in unauthenticated mode (' + data.rate_limit + '). Add GITHUB_TOKEN for higher rate limits.</div>';
+            }} else {{
+                html += '<div class="status success">🔑 Authenticated mode (' + data.rate_limit + ')</div>';
+            }}
+            
+            if (data.sync_in_progress) {{
                 html += '<div class="status info">🔄 Sync in progress...</div>';
             }} else if (data.last_sync) {{
                 const lastSync = new Date(data.last_sync);
@@ -989,12 +1031,13 @@ def sync_page():
             
             // Update button state
             const syncBtn = document.getElementById('syncBtn');
-            if (!data.sync_enabled || data.sync_in_progress) {{
+            if (data.sync_in_progress) {{
                 syncBtn.disabled = true;
-                syncBtn.textContent = data.sync_in_progress ? '🔄 Syncing...' : '❌ Sync Disabled';
+                syncBtn.textContent = '🔄 Syncing...';
             }} else {{
                 syncBtn.disabled = false;
-                syncBtn.textContent = '🚀 Trigger Manual Sync';
+                const mode = data.authenticated ? 'Authenticated' : 'Unauthenticated';
+                syncBtn.textContent = '🚀 Trigger Manual Sync (' + mode + ')';
             }}
         }}
         
@@ -1036,7 +1079,9 @@ def sync_page():
 def get_sync_status():
     """Get current sync status"""
     return jsonify({
-        'sync_enabled': GITHUB_TOKEN is not None,
+        'sync_enabled': True,  # Always enabled now (can run with or without token)
+        'authenticated': GITHUB_TOKEN is not None,
+        'rate_limit': '5000 requests/hour' if GITHUB_TOKEN else '60 requests/hour',
         'last_sync': sync_status['last_sync'],
         'sync_in_progress': sync_status['sync_in_progress'],
         'next_sync': sync_status['next_sync'],
@@ -1048,17 +1093,13 @@ def get_sync_status():
 @app.route('/api/sync_now', methods=['POST'])
 def trigger_sync():
     """Manually trigger a sync (admin endpoint)"""
-    if not GITHUB_TOKEN:
-        return jsonify({
-            'status': 'error',
-            'message': 'GitHub token not configured'
-        }), 400
-    
     if sync_status['sync_in_progress']:
         return jsonify({
             'status': 'error',
             'message': 'Sync already in progress'
         }), 409
+    
+    auth_status = "authenticated" if GITHUB_TOKEN else "unauthenticated"
     
     # Start sync in background thread
     def run_sync():
@@ -1068,7 +1109,8 @@ def trigger_sync():
     
     return jsonify({
         'status': 'success',
-        'message': 'Sync started in background'
+        'message': f'Sync started in background ({auth_status} mode)',
+        'authenticated': GITHUB_TOKEN is not None
     })
 
 @app.route('/health')
