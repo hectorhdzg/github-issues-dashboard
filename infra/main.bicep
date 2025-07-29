@@ -163,6 +163,24 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
           name: 'WEBSITES_PORT'
           value: '5000'
         }
+        // OpenTelemetry Configuration
+        {
+          name: 'OTEL_SERVICE_NAME'
+          value: 'github-issues-dashboard'
+        }
+        {
+          name: 'OTEL_SERVICE_VERSION'
+          value: '1.0.0'
+        }
+        {
+          name: 'OTEL_RESOURCE_ATTRIBUTES'
+          value: 'service.name=github-issues-dashboard,service.version=1.0.0,deployment.environment=${environmentName}'
+        }
+        {
+          name: 'AZURE_MONITOR_DISABLE_OFFLINE_STORAGE'
+          value: 'false'
+        }
+        }
       ]
     }
   }

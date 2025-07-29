@@ -4,12 +4,57 @@ Fixed Simple Flask server for GitHub Issues Dashboard
 Serves the dashboard using existing cached data with proper navigation
 """
 
+import os
+import logging
 from flask import Flask, render_template_string, jsonify, request
 import sqlite3
 import json
 from datetime import datetime, timezone
-import os
 from urllib.parse import unquote
+
+# Azure Monitor OpenTelemetry SDK imports
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry import trace, metrics
+
+# Configure Azure Monitor OpenTelemetry with auto-instrumentation
+connection_string = os.environ.get('APPLICATIONINSIGHTS_CONNECTION_STRING')
+if connection_string:
+    print(f"🔧 Configuring Azure Monitor OpenTelemetry with connection string: {connection_string[:50]}...")
+    # Azure Monitor auto-instruments Flask, requests, SQLite, and more automatically
+    configure_azure_monitor(
+        connection_string=connection_string,
+        # Auto-instrumentation is enabled by default and includes:
+        # - Flask (HTTP requests, responses)
+        # - Requests (outbound HTTP calls)
+        # - SQLite3 (database operations)
+        # - Logging (application logs)
+        # - And many more libraries automatically
+    )
+    
+    # Get tracer and meter for custom telemetry only
+    tracer = trace.get_tracer(__name__)
+    meter = metrics.get_meter(__name__)
+    
+    # Create custom metrics for business logic
+    issue_counter = meter.create_counter(
+        name="github_issues_processed",
+        description="Number of GitHub issues processed",
+        unit="1"
+    )
+    
+    repo_counter = meter.create_counter(
+        name="repository_sections_rendered",
+        description="Number of repository sections rendered",
+        unit="1"
+    )
+    
+    print("✅ Azure Monitor OpenTelemetry configured with auto-instrumentation")
+else:
+    print("⚠️ APPLICATIONINSIGHTS_CONNECTION_STRING not found, OpenTelemetry disabled")
+    tracer = None
+    meter = None
+    issue_counter = None
+    repo_counter = None
 
 app = Flask(__name__)
 
@@ -43,7 +88,20 @@ def load_html_template():
 
 def get_issues_from_db():
     """Get all issues from database"""
+    # Create a custom span for database operations
+    if tracer:
+        with tracer.start_as_current_span("get_issues_from_db") as span:
+            return _get_issues_from_db_internal(span)
+    else:
+        return _get_issues_from_db_internal(None)
+
+def _get_issues_from_db_internal(span=None):
+    """Internal function to get issues from database with telemetry"""
     try:
+        if span:
+            span.set_attribute("operation.type", "database_read")
+            span.set_attribute("database.name", "github_issues.db")
+        
         # Try different database paths for local and Azure environments
         db_paths = [
             'github_issues.db',  # Local relative path
@@ -58,15 +116,22 @@ def get_issues_from_db():
                     print(f"Trying to connect to database at: {db_path}")
                     conn = sqlite3.connect(db_path)
                     conn.row_factory = sqlite3.Row
+                    if span:
+                        span.set_attribute("database.path", db_path)
                     break
             except Exception as e:
                 print(f"Failed to connect to database at {db_path}: {e}")
+                if span:
+                    span.record_exception(e)
                 continue
         
         if conn is None:
             print("No database found. Creating sample data.")
+            if span:
+                span.set_attribute("data.source", "sample_data")
             return get_sample_issues()
         
+        # SQLite operations are automatically instrumented by Azure Monitor
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -84,10 +149,25 @@ def get_issues_from_db():
             issues.append(issue)
         
         conn.close()
-        print(f"Successfully loaded {len(issues)} issues from database")
+        
+        # Log telemetry for business metrics only
+        issue_count = len(issues)
+        print(f"Successfully loaded {issue_count} issues from database")
+        
+        if span:
+            span.set_attribute("issues.count", issue_count)
+            span.set_attribute("data.source", "database")
+        
+        # Custom business metric
+        if issue_counter:
+            issue_counter.add(issue_count, {"source": "database"})
+        
         return issues
     except Exception as e:
         print(f"Error getting issues from database: {e}")
+        if span:
+            span.record_exception(e)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
         return get_sample_issues()
 
 def get_sample_issues():
@@ -273,19 +353,45 @@ def generate_repo_section(repo, issues, is_first=False):
 @app.route('/')
 def dashboard():
     """Main dashboard route"""
+    # Create custom span for dashboard rendering
+    if tracer:
+        with tracer.start_as_current_span("dashboard_render") as span:
+            return _dashboard_internal(span)
+    else:
+        return _dashboard_internal(None)
+
+def _dashboard_internal(span=None):
+    """Internal dashboard function with telemetry"""
     print("🌐 Serving GitHub Issues Dashboard...")
     
     # Get the selected repo from query parameter
     selected_repo = request.args.get('repo', '')
     selected_repo = unquote(selected_repo) if selected_repo else ''
     
+    if span:
+        span.set_attribute("dashboard.selected_repo", selected_repo)
+        span.set_attribute("request.method", "GET")
+    
     # Get issues from database
     issues = get_issues_from_db()
     if not issues:
+        if span:
+            span.set_attribute("dashboard.issues_found", False)
         return "<h1>No issues found in database. Please run sync first.</h1>"
+    
+    if span:
+        span.set_attribute("dashboard.issues_found", True)
+        span.set_attribute("dashboard.total_issues", len(issues))
     
     # Group issues by repository
     repo_groups = group_issues_by_repo(issues)
+    
+    if span:
+        span.set_attribute("dashboard.repository_count", len(repo_groups))
+    
+    # Custom business metric for repository rendering
+    if repo_counter:
+        repo_counter.add(len(repo_groups), {"type": "dashboard_render"})
     
     # Generate repository sections and navigation links
     repo_sections = ""
@@ -416,8 +522,15 @@ def update_issue():
 
 @app.route('/health')
 def health():
-    """Simple health check endpoint"""
-    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+    """Simple health check endpoint with telemetry"""
+    if tracer:
+        with tracer.start_as_current_span("health_check") as span:
+            span.set_attribute("endpoint.type", "health_check")
+            response_data = {'status': 'healthy', 'timestamp': datetime.now().isoformat(), 'telemetry_enabled': True}
+            span.set_attribute("health.status", "healthy")
+            return jsonify(response_data)
+    else:
+        return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat(), 'telemetry_enabled': False})
 
 if __name__ == '__main__':
     print("🚀 Starting Fixed GitHub Issues Dashboard Server...")
