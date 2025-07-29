@@ -6,6 +6,10 @@ Serves the dashboard using existing cached data with proper navigation
 
 import os
 import logging
+import threading
+import time
+import requests
+import schedule
 from flask import Flask, render_template_string, jsonify, request
 import sqlite3
 import json
@@ -57,6 +61,282 @@ else:
     repo_counter = None
 
 app = Flask(__name__)
+
+# GitHub API Configuration
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+GITHUB_API_BASE = 'https://api.github.com'
+
+# Repositories to sync (same as in the database)
+REPOSITORIES = [
+    'Azure/azure-sdk-for-js',
+    'Azure/azure-sdk-for-python',
+    'microsoft/ApplicationInsights-js',
+    'microsoft/ApplicationInsights-node.js',
+    'microsoft/ApplicationInsights-node.js-native-metrics',
+    'microsoft/DynamicProto-JS',
+    'microsoft/applicationinsights-angularplugin-js',
+    'microsoft/applicationinsights-react-js',
+    'microsoft/applicationinsights-react-native',
+    'microsoft/node-diagnostic-channel',
+    'open-telemetry/opentelemetry-js',
+    'open-telemetry/opentelemetry-js-contrib',
+    'open-telemetry/opentelemetry-python',
+    'open-telemetry/opentelemetry-python-contrib'
+]
+
+# Sync status tracking
+sync_status = {
+    'last_sync': None,
+    'sync_in_progress': False,
+    'next_sync': None,
+    'total_synced': 0,
+    'errors': []
+}
+
+def get_github_headers():
+    """Get headers for GitHub API requests"""
+    headers = {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'GitHub-Issues-Dashboard/1.0'
+    }
+    if GITHUB_TOKEN:
+        headers['Authorization'] = f'token {GITHUB_TOKEN}'
+    return headers
+
+def fetch_github_issues(repo, per_page=100):
+    """Fetch issues from a GitHub repository"""
+    if not GITHUB_TOKEN:
+        print(f"⚠️ No GitHub token configured, skipping sync for {repo}")
+        return []
+    
+    print(f"🔄 Fetching issues from {repo}...")
+    
+    all_issues = []
+    page = 1
+    
+    while True:
+        try:
+            # Get both open and closed issues
+            url = f"{GITHUB_API_BASE}/repos/{repo}/issues"
+            params = {
+                'state': 'all',  # Include both open and closed
+                'per_page': per_page,
+                'page': page,
+                'sort': 'updated',
+                'direction': 'desc'
+            }
+            
+            response = requests.get(url, headers=get_github_headers(), params=params)
+            response.raise_for_status()
+            
+            issues = response.json()
+            if not issues:
+                break  # No more issues
+            
+            # Filter out pull requests (they have 'pull_request' key)
+            issues = [issue for issue in issues if 'pull_request' not in issue]
+            
+            all_issues.extend(issues)
+            print(f"  📄 Fetched page {page}: {len(issues)} issues")
+            
+            page += 1
+            
+            # Stop after 5 pages to avoid rate limiting (500 issues max per repo)
+            if page > 5:
+                print(f"  ⚠️ Reached page limit for {repo}")
+                break
+                
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error fetching issues from {repo}: {e}")
+            sync_status['errors'].append(f"Error fetching {repo}: {str(e)}")
+            break
+            
+        except Exception as e:
+            print(f"❌ Unexpected error fetching {repo}: {e}")
+            sync_status['errors'].append(f"Unexpected error for {repo}: {str(e)}")
+            break
+    
+    print(f"✅ Fetched {len(all_issues)} total issues from {repo}")
+    return all_issues
+
+def update_database_with_issues(repo, issues):
+    """Update the database with fetched issues"""
+    if not issues:
+        return 0
+    
+    try:
+        # Try different database paths for local and Azure environments
+        db_paths = [
+            'github_issues.db',  # Local relative path
+            '/home/site/wwwroot/github_issues.db',  # Azure Linux App Service path
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')  # Absolute path relative to script
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    break
+            except Exception:
+                continue
+        
+        if not conn:
+            print(f"❌ Could not connect to database for {repo}")
+            return 0
+        
+        cursor = conn.cursor()
+        updated_count = 0
+        
+        for issue in issues:
+            try:
+                # Extract issue data
+                number = issue['number']
+                title = issue['title']
+                html_url = issue['html_url']
+                assignee_login = issue['assignee']['login'] if issue['assignee'] else None
+                created_at = issue['created_at']
+                updated_at = issue['updated_at']
+                body = issue.get('body', '')
+                state = issue['state']
+                last_fetched = datetime.now(timezone.utc).isoformat()
+                
+                # Insert or update issue
+                cursor.execute('''
+                    INSERT OR REPLACE INTO issues (
+                        repo, number, title, html_url, assignee_login, 
+                        created_at, updated_at, body, state, last_fetched
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    repo, number, title, html_url, assignee_login,
+                    created_at, updated_at, body, state, last_fetched
+                ))
+                
+                updated_count += 1
+                
+            except Exception as e:
+                print(f"❌ Error updating issue #{issue.get('number', '?')} in {repo}: {e}")
+                continue
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Updated {updated_count} issues for {repo}")
+        return updated_count
+        
+    except Exception as e:
+        print(f"❌ Database error for {repo}: {e}")
+        sync_status['errors'].append(f"Database error for {repo}: {str(e)}")
+        return 0
+
+def sync_all_repositories():
+    """Sync all configured repositories"""
+    if sync_status['sync_in_progress']:
+        print("🔄 Sync already in progress, skipping...")
+        return
+    
+    print("🚀 Starting GitHub repositories sync...")
+    sync_status['sync_in_progress'] = True
+    sync_status['errors'] = []  # Clear previous errors
+    
+    total_updated = 0
+    start_time = datetime.now(timezone.utc)
+    
+    try:
+        for repo in REPOSITORIES:
+            if not sync_status['sync_in_progress']:  # Check if sync was cancelled
+                break
+                
+            print(f"\n📋 Syncing repository: {repo}")
+            
+            # Fetch issues from GitHub
+            issues = fetch_github_issues(repo)
+            
+            # Update database
+            updated_count = update_database_with_issues(repo, issues)
+            total_updated += updated_count
+            
+            # Small delay to be respectful to GitHub API
+            time.sleep(1)
+        
+        sync_status['last_sync'] = datetime.now(timezone.utc).isoformat()
+        sync_status['total_synced'] = total_updated
+        
+        print(f"\n🎉 Sync completed! Updated {total_updated} issues across {len(REPOSITORIES)} repositories")
+        
+        if sync_status['errors']:
+            print(f"⚠️ Encountered {len(sync_status['errors'])} errors during sync")
+        
+    except Exception as e:
+        print(f"❌ Critical error during sync: {e}")
+        sync_status['errors'].append(f"Critical sync error: {str(e)}")
+    
+    finally:
+        sync_status['sync_in_progress'] = False
+        
+        # Calculate next sync time (24 hours from now)
+        next_sync = datetime.now(timezone.utc).replace(hour=2, minute=0, second=0, microsecond=0)
+        if next_sync <= datetime.now(timezone.utc):
+            next_sync = next_sync.replace(day=next_sync.day + 1)
+        sync_status['next_sync'] = next_sync.isoformat()
+
+def start_sync_scheduler():
+    """Start the background sync scheduler"""
+    if not GITHUB_TOKEN:
+        print("⚠️ No GITHUB_TOKEN found, scheduled sync disabled")
+        print("💡 Set GITHUB_TOKEN environment variable to enable automatic sync")
+        return
+    
+    print("⏰ Starting sync scheduler (every 24 hours at 2:00 AM UTC)")
+    
+    try:
+        # Schedule daily sync at 2:00 AM UTC to avoid peak hours
+        schedule.every().day.at("02:00").do(sync_all_repositories)
+        
+        # Run initial sync check in a separate thread to avoid blocking import
+        def check_and_run_initial_sync():
+            try:
+                time.sleep(2)  # Small delay to ensure app is fully loaded
+                conn = sqlite3.connect('github_issues.db')
+                cursor = conn.execute('SELECT MAX(last_fetched) FROM issues')
+                last_fetch = cursor.fetchone()[0]
+                conn.close()
+                
+                if not last_fetch:
+                    print("📊 No sync data found, but skipping initial sync during startup")
+                    print("💡 Visit /sync to trigger manual sync or set up GitHub token")
+                else:
+                    last_fetch_time = datetime.fromisoformat(last_fetch.replace('Z', '+00:00'))
+                    hours_since = (datetime.now(timezone.utc) - last_fetch_time).total_seconds() / 3600
+                    
+                    if hours_since > 24:
+                        print(f"📊 Data is {hours_since:.1f} hours old, sync recommended")
+                        print("💡 Visit /sync to check sync status and trigger manual sync")
+                    else:
+                        print(f"📊 Data is {hours_since:.1f} hours old, sync not needed")
+            except Exception as e:
+                print(f"⚠️ Could not check sync status: {e}")
+        
+        # Start the initial check in a daemon thread
+        threading.Thread(target=check_and_run_initial_sync, daemon=True).start()
+        
+        # Start the scheduler in a background daemon thread
+        def run_scheduler():
+            while True:
+                try:
+                    schedule.run_pending()
+                    time.sleep(60)  # Check every minute
+                except Exception as e:
+                    print(f"⚠️ Scheduler error: {e}")
+                    time.sleep(60)  # Continue despite errors
+        
+        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+        scheduler_thread.start()
+        print("✅ Sync scheduler started successfully")
+        
+    except Exception as e:
+        print(f"⚠️ Failed to start sync scheduler: {e}")
+        print("💡 Sync functionality will be disabled")
 
 def load_html_template():
     """Load the HTML template from file"""
@@ -203,6 +483,109 @@ def group_issues_by_repo(issues):
         repos[repo].append(issue)
     return repos
 
+def extract_pr_references(issue_body, repo_name):
+    """Extract PR references from issue body text"""
+    import re
+    
+    if not issue_body:
+        return []
+    
+    pr_references = []
+    
+    # Pattern 1: Full GitHub PR URLs
+    # Example: https://github.com/Azure/azure-sdk-for-python/pull/1234
+    full_pr_pattern = r'https://github\.com/([^/]+)/([^/]+)/pull/(\d+)'
+    full_matches = re.findall(full_pr_pattern, issue_body)
+    
+    for owner, repo, pr_number in full_matches:
+        pr_url = f"https://github.com/{owner}/{repo}/pull/{pr_number}"
+        pr_references.append({
+            'url': pr_url,
+            'number': pr_number,
+            'repo': f"{owner}/{repo}",
+            'is_same_repo': f"{owner}/{repo}" == repo_name
+        })
+    
+    # Pattern 2: Short PR references within the same repo
+    # Pattern 2: Short references within the same repo
+    # Example: #1234 (could be PR or issue)
+    if repo_name:
+        short_pr_pattern = r'(?:^|\s)#(\d+)(?:\s|$|[^\w])'
+        short_matches = re.findall(short_pr_pattern, issue_body)
+        
+        for pr_number in short_matches:
+            # Create a reference URL for the same repo (will link to PR, but could be issue)
+            pr_url = f"https://github.com/{repo_name}/pull/{pr_number}"
+            pr_references.append({
+                'url': pr_url,
+                'number': pr_number,
+                'repo': repo_name,
+                'is_same_repo': True
+            })
+    
+    # Pattern 3: Text-based PR references (but not from full URLs)
+    # Example: "PR 1234", "pull request #1234"
+    # Note: We exclude "pull/1234" if it's part of a full GitHub URL
+    
+    # First, remove all full GitHub URLs from the text to avoid false positives
+    cleaned_body = re.sub(r'https://github\.com/[^/]+/[^/]+/pull/\d+[^\s]*', '', issue_body)
+    
+    text_pr_patterns = [
+        r'(?:PR|pr)\s*#?(\d+)',
+        r'(?:pull request|Pull Request)\s*#?(\d+)',
+        r'(?<!/)\bpull/(\d+)'  # pull/1234 but not if preceded by /
+    ]
+    
+    for pattern in text_pr_patterns:
+        matches = re.findall(pattern, cleaned_body, re.IGNORECASE)
+        for pr_number in matches:
+            if repo_name:
+                pr_url = f"https://github.com/{repo_name}/pull/{pr_number}"
+                pr_references.append({
+                    'url': pr_url,
+                    'number': pr_number,
+                    'repo': repo_name,
+                    'is_same_repo': True,
+                    'is_text_reference': True
+                })
+    
+    # Remove duplicates based on URL
+    seen_urls = set()
+    unique_references = []
+    for ref in pr_references:
+        if ref['url'] not in seen_urls:
+            seen_urls.add(ref['url'])
+            unique_references.append(ref)
+    
+    return unique_references
+
+def format_pr_references(pr_references):
+    """Format PR references for display in the dashboard"""
+    if not pr_references:
+        return 'None'
+    
+    formatted_refs = []
+    for ref in pr_references:
+        pr_number = ref['number']
+        
+        # Add indicators for different types of references
+        indicators = []
+        if ref.get('is_text_reference'):
+            indicators.append('T')  # Text-based reference
+        if not ref['is_same_repo']:
+            indicators.append('E')  # External repository
+        
+        indicator_str = ''.join(indicators)
+        if indicator_str:
+            indicator_str = f"<sup>{indicator_str}</sup>"
+        
+        # Always display as #number, regardless of repository
+        link_text = f"#{pr_number}{indicator_str}"
+        
+        formatted_refs.append(f'<a href="{ref["url"]}" target="_blank">{link_text}</a>')
+    
+    return ', '.join(formatted_refs)
+
 def generate_repo_section(repo, issues, is_first=False):
     """Generate HTML section for a repository"""
     # Determine language group
@@ -256,13 +639,9 @@ def generate_repo_section(repo, issues, is_first=False):
         else:
             assignee_display = 'Unassigned'
         
-        # Get linked PR information
-        linked_pr = issue.get('linked_pr')
-        if linked_pr:
-            pr_number = linked_pr.split("/")[-1]
-            pr_display = f'<a href="{linked_pr}" target="_blank">PR #{pr_number}</a>'
-        else:
-            pr_display = 'None'
+        # Extract PR references from issue body instead of using database linked_pr field
+        pr_references = extract_pr_references(issue.get('body', ''), repo)
+        pr_display = format_pr_references(pr_references)
         
         # Get triage and priority information
         triage = issue.get('triage', 0)
@@ -316,7 +695,7 @@ def generate_repo_section(repo, issues, is_first=False):
                         <th>Issue #</th>
                         <th>Title</th>
                         <th>Assignee</th>
-                        <th>Linked PR</th>
+                        <th>Related PRs/Issues</th>
                         <th>Created</th>
                         <th>Updated</th>
                         <th>Triage</th>
@@ -520,6 +899,178 @@ def update_issue():
             'error': str(e)
         }), 500
 
+@app.route('/sync')
+def sync_page():
+    """Simple sync status page"""
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GitHub Sync Status</title>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="30">
+    <style>
+        body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+        .status {{ padding: 15px; margin: 10px 0; border-radius: 5px; }}
+        .success {{ background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }}
+        .warning {{ background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }}
+        .error {{ background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }}
+        .info {{ background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+        th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; }}
+        th {{ background: #f8f9fa; }}
+        .btn {{ padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }}
+        .btn:hover {{ background: #0056b3; }}
+        .btn:disabled {{ background: #6c757d; cursor: not-allowed; }}
+    </style>
+</head>
+<body>
+    <h1>🔄 GitHub Sync Status</h1>
+    
+    <div id="status">Loading...</div>
+    
+    <div style="margin: 20px 0;">
+        <button id="syncBtn" class="btn" onclick="triggerSync()">🚀 Trigger Manual Sync</button>
+        <button class="btn" onclick="location.reload()">🔄 Refresh</button>
+        <a href="/" class="btn" style="text-decoration: none; margin-left: 10px;">🏠 Back to Dashboard</a>
+    </div>
+    
+    <script>
+        function loadStatus() {{
+            fetch('/api/sync_status')
+                .then(response => response.json())
+                .then(data => {{
+                    updateStatusDisplay(data);
+                }})
+                .catch(error => {{
+                    document.getElementById('status').innerHTML = 
+                        '<div class="status error">❌ Error loading status: ' + error + '</div>';
+                }});
+        }}
+        
+        function updateStatusDisplay(data) {{
+            let html = '';
+            
+            if (!data.sync_enabled) {{
+                html += '<div class="status warning">⚠️ GitHub sync is disabled. No GITHUB_TOKEN configured.</div>';
+            }} else if (data.sync_in_progress) {{
+                html += '<div class="status info">🔄 Sync in progress...</div>';
+            }} else if (data.last_sync) {{
+                const lastSync = new Date(data.last_sync);
+                html += '<div class="status success">✅ Last sync: ' + lastSync.toLocaleString() + '</div>';
+            }} else {{
+                html += '<div class="status warning">⚠️ No sync has been performed yet.</div>';
+            }}
+            
+            if (data.next_sync) {{
+                const nextSync = new Date(data.next_sync);
+                html += '<div class="status info">⏰ Next scheduled sync: ' + nextSync.toLocaleString() + '</div>';
+            }}
+            
+            if (data.total_synced > 0) {{
+                html += '<div class="status info">📊 Total issues synced: ' + data.total_synced + '</div>';
+            }}
+            
+            if (data.errors && data.errors.length > 0) {{
+                html += '<div class="status error">❌ Recent errors:<ul>';
+                data.errors.forEach(error => {{
+                    html += '<li>' + error + '</li>';
+                }});
+                html += '</ul></div>';
+            }}
+            
+            html += '<h3>📋 Repositories:</h3><table><tr><th>Repository</th><th>Status</th></tr>';
+            data.repositories.forEach(repo => {{
+                html += '<tr><td>' + repo + '</td><td>✅ Configured</td></tr>';
+            }});
+            html += '</table>';
+            
+            document.getElementById('status').innerHTML = html;
+            
+            // Update button state
+            const syncBtn = document.getElementById('syncBtn');
+            if (!data.sync_enabled || data.sync_in_progress) {{
+                syncBtn.disabled = true;
+                syncBtn.textContent = data.sync_in_progress ? '🔄 Syncing...' : '❌ Sync Disabled';
+            }} else {{
+                syncBtn.disabled = false;
+                syncBtn.textContent = '🚀 Trigger Manual Sync';
+            }}
+        }}
+        
+        function triggerSync() {{
+            const syncBtn = document.getElementById('syncBtn');
+            syncBtn.disabled = true;
+            syncBtn.textContent = '🔄 Starting...';
+            
+            fetch('/api/sync_now', {{ method: 'POST' }})
+                .then(response => response.json())
+                .then(data => {{
+                    if (data.status === 'success') {{
+                        alert('✅ Sync started in background!');
+                        setTimeout(loadStatus, 2000); // Reload status after 2 seconds
+                    }} else {{
+                        alert('❌ Error: ' + data.message);
+                        syncBtn.disabled = false;
+                        syncBtn.textContent = '🚀 Trigger Manual Sync';
+                    }}
+                }})
+                .catch(error => {{
+                    alert('❌ Network error: ' + error);
+                    syncBtn.disabled = false;
+                    syncBtn.textContent = '🚀 Trigger Manual Sync';
+                }});
+        }}
+        
+        // Load status on page load
+        loadStatus();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadStatus, 30000);
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/api/sync_status')
+def get_sync_status():
+    """Get current sync status"""
+    return jsonify({
+        'sync_enabled': GITHUB_TOKEN is not None,
+        'last_sync': sync_status['last_sync'],
+        'sync_in_progress': sync_status['sync_in_progress'],
+        'next_sync': sync_status['next_sync'],
+        'total_synced': sync_status['total_synced'],
+        'errors': sync_status['errors'][-5:],  # Last 5 errors only
+        'repositories': REPOSITORIES
+    })
+
+@app.route('/api/sync_now', methods=['POST'])
+def trigger_sync():
+    """Manually trigger a sync (admin endpoint)"""
+    if not GITHUB_TOKEN:
+        return jsonify({
+            'status': 'error',
+            'message': 'GitHub token not configured'
+        }), 400
+    
+    if sync_status['sync_in_progress']:
+        return jsonify({
+            'status': 'error',
+            'message': 'Sync already in progress'
+        }), 409
+    
+    # Start sync in background thread
+    def run_sync():
+        sync_all_repositories()
+    
+    threading.Thread(target=run_sync, daemon=True).start()
+    
+    return jsonify({
+        'status': 'success',
+        'message': 'Sync started in background'
+    })
+
 @app.route('/health')
 def health():
     """Simple health check endpoint with telemetry"""
@@ -539,4 +1090,10 @@ if __name__ == '__main__':
     print("💡 Press Ctrl+C to stop the server")
     print("")
     
+    # Start the sync scheduler
+    start_sync_scheduler()
+    
     app.run(host='0.0.0.0', port=5000, debug=True)
+else:
+    # For production deployment (e.g., gunicorn), start scheduler when module is imported
+    start_sync_scheduler()

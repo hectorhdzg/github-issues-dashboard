@@ -17,6 +17,10 @@ param flaskEnv string = 'production'
 @description('Flask debug setting')
 param flaskDebug string = 'false'
 
+@description('GitHub API token for syncing issues (optional)')
+@secure()
+param githubToken string = ''
+
 // Generate a unique token for resource naming
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location, environmentName)
 var resourcePrefix = 'ghd' // GitHub Dashboard prefix (≤ 3 characters)
@@ -179,6 +183,10 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
         {
           name: 'AZURE_MONITOR_DISABLE_OFFLINE_STORAGE'
           value: 'false'
+        }
+        {
+          name: 'GITHUB_TOKEN'
+          value: githubToken
         }
         }
       ]
