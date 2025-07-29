@@ -44,8 +44,29 @@ def load_html_template():
 def get_issues_from_db():
     """Get all issues from database"""
     try:
-        conn = sqlite3.connect('github_issues.db')
-        conn.row_factory = sqlite3.Row
+        # Try different database paths for local and Azure environments
+        db_paths = [
+            'github_issues.db',  # Local relative path
+            '/home/site/wwwroot/github_issues.db',  # Azure Linux App Service path
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')  # Absolute path relative to script
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    print(f"Trying to connect to database at: {db_path}")
+                    conn = sqlite3.connect(db_path)
+                    conn.row_factory = sqlite3.Row
+                    break
+            except Exception as e:
+                print(f"Failed to connect to database at {db_path}: {e}")
+                continue
+        
+        if conn is None:
+            print("No database found. Creating sample data.")
+            return get_sample_issues()
+        
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -63,10 +84,34 @@ def get_issues_from_db():
             issues.append(issue)
         
         conn.close()
+        print(f"Successfully loaded {len(issues)} issues from database")
         return issues
     except Exception as e:
         print(f"Error getting issues from database: {e}")
-        return []
+        return get_sample_issues()
+
+def get_sample_issues():
+    """Return sample issues when database is not available"""
+    return [
+        {
+            'id': 1,
+            'repository': 'Azure/azure-sdk-for-python',
+            'repo': 'Azure/azure-sdk-for-python', 
+            'number': 123,
+            'title': 'Sample Issue - Database Not Available',
+            'html_url': 'https://github.com/Azure/azure-sdk-for-python/issues/123',
+            'state': 'open',
+            'assignee_login': None,
+            'created_at': '2025-01-01T00:00:00Z',
+            'updated_at': '2025-01-01T00:00:00Z',
+            'body': 'This is a sample issue displayed when the database is not available.',
+            'labels': [],
+            'linked_pr': None,
+            'last_fetched': '2025-01-01T00:00:00Z',
+            'triage': 0,
+            'priority': 2
+        }
+    ]
 
 def group_issues_by_repo(issues):
     """Group issues by repository"""
@@ -368,6 +413,11 @@ def update_issue():
             'status': 'error',
             'error': str(e)
         }), 500
+
+@app.route('/health')
+def health():
+    """Simple health check endpoint"""
+    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
 if __name__ == '__main__':
     print("🚀 Starting Fixed GitHub Issues Dashboard Server...")

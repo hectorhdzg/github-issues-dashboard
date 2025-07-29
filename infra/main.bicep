@@ -34,7 +34,6 @@ resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
   location: location
   tags: {
     'azd-env-name': environmentName
-    'azd-service-name': 'dashboard-app'
   }
 }
 
@@ -44,7 +43,6 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09
   location: location
   tags: {
     'azd-env-name': environmentName
-    'azd-service-name': 'dashboard-app'
   }
   properties: {
     sku: {
@@ -66,7 +64,6 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
   kind: 'web'
   tags: {
     'azd-env-name': environmentName
-    'azd-service-name': 'dashboard-app'
   }
   properties: {
     Application_Type: 'web'
@@ -83,7 +80,6 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {
   location: location
   tags: {
     'azd-env-name': environmentName
-    'azd-service-name': 'dashboard-app'
   }
   sku: {
     name: 'B1' // Basic tier for cost-effective hosting
@@ -182,50 +178,40 @@ resource appServiceDiagnosticSettings 'Microsoft.Insights/diagnosticSettings@202
       {
         category: 'AppServiceHTTPLogs'
         enabled: true
-        retentionPolicy: {
-          days: 30
-          enabled: true
-        }
       }
       {
         category: 'AppServiceConsoleLogs'
         enabled: true
-        retentionPolicy: {
-          days: 30
-          enabled: true
-        }
       }
       {
         category: 'AppServiceAppLogs'
         enabled: true
-        retentionPolicy: {
-          days: 30
-          enabled: true
-        }
       }
       {
         category: 'AppServiceAuditLogs'
         enabled: true
-        retentionPolicy: {
-          days: 30
-          enabled: true
-        }
       }
     ]
     metrics: [
       {
         category: 'AllMetrics'
         enabled: true
-        retentionPolicy: {
-          days: 30
-          enabled: true
-        }
       }
     ]
   }
 }
 
 // Required outputs for AZD deployment
+output AZURE_LOCATION string = location
+output AZURE_TENANT_ID string = tenant().tenantId
+output REACT_APP_API_BASE_URL string = 'https://${appService.properties.defaultHostName}'
+output REACT_APP_WEB_BASE_URL string = 'https://${appService.properties.defaultHostName}'
+output SERVICE_DASHBOARD_APP_ENDPOINT_URL string = 'https://${appService.properties.defaultHostName}'
+output SERVICE_DASHBOARD_APP_IDENTITY_PRINCIPAL_ID string = managedIdentity.properties.principalId
+output SERVICE_DASHBOARD_APP_NAME string = appService.name
+output SERVICE_DASHBOARD_APP_RESOURCE_EXISTS bool = true
+
+// Additional helpful outputs
 output RESOURCE_GROUP_ID string = resourceGroup().id
 output AZURE_APP_SERVICE_NAME string = appService.name
 output AZURE_APP_SERVICE_URL string = 'https://${appService.properties.defaultHostName}'
