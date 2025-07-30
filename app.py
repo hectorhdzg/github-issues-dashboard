@@ -843,6 +843,28 @@ def format_triage_text(triage):
     else:
         return '<span class="text-muted" title="Not triaged">—</span>'
 
+def get_repo_category(repo):
+    """Determine the category of a repository for color coding"""
+    if repo.startswith('open-telemetry/'):
+        return 'opentelemetry'
+    elif repo.startswith('Azure/'):
+        return 'azure'
+    elif repo.startswith('microsoft/'):
+        return 'microsoft'
+    else:
+        return 'other'
+
+def get_repo_color_class(repo):
+    """Get CSS color class based on repository category"""
+    category = get_repo_category(repo)
+    color_classes = {
+        'opentelemetry': 'otel-theme',     # Orange/Red theme for OpenTelemetry
+        'azure': 'azure-theme',           # Blue theme for Azure
+        'microsoft': 'microsoft-theme',   # Green theme for Microsoft
+        'other': 'default-theme'          # Gray theme for others
+    }
+    return color_classes.get(category, 'default-theme')
+
 def generate_repo_section(repo, issues, is_first=False):
     """Generate HTML section for a repository"""
     # Determine language group
@@ -857,6 +879,10 @@ def generate_repo_section(repo, issues, is_first=False):
     else:
         language = 'Browser JavaScript'
         lang_class = 'browser-js'
+    
+    # Get color theme for this repository
+    color_class = get_repo_color_class(repo)
+    repo_category = get_repo_category(repo)
     
     repo_name = repo.split('/')[-1]
     repo_id = repo.replace('/', '-').replace('.', '-')
@@ -953,11 +979,12 @@ def generate_repo_section(repo, issues, is_first=False):
         """
     
     return f"""
-    <div class="repo-section{active_class}" id="repo-{repo_id}" data-language="{lang_class}" data-repo-name="{repo}">
-        <div class="repo-header{active_class}" onclick="toggleSection('{repo_id}')">
+    <div class="repo-section{active_class} {color_class}" id="repo-{repo_id}" data-language="{lang_class}" data-repo-name="{repo}" data-category="{repo_category}">
+        <div class="repo-header{active_class} {color_class}" onclick="toggleSection('{repo_id}')">
             <h2>
                 <a href="https://github.com/{repo}" target="_blank">{repo_name}</a>
                 <span class="issue-count">({issue_count} issues)</span>
+                <span class="category-badge {color_class}">{repo_category.upper()}</span>
             </h2>
         </div>
         <div class="controls">
@@ -966,8 +993,8 @@ def generate_repo_section(repo, issues, is_first=False):
                    onkeyup="filterTable('{repo_id}', this.value)">
         </div>
         <div class="table-container">
-            <table class="table table-hover table-striped issues-table" id="table-{repo_id}">
-                <thead>
+            <table class="table table-hover table-striped issues-table {color_class}" id="table-{repo_id}">
+                <thead class="table-header {color_class}">
                     <tr>
                         <th style="width: 60px;">Edit</th>
                         <th class="sortable" data-column="title" onclick="sortTable('{repo_id}', 'title')">
@@ -1342,12 +1369,16 @@ def _dashboard_internal(span=None):
         
         repo_sections += generate_repo_section(repo, repo_issues, is_first)
         
-        # Generate navigation link for Bootstrap dropdown
+        # Generate navigation link for Bootstrap dropdown with color coding
         repo_name = repo.split('/')[-1]
         issue_count = len(repo_issues)
-        nav_link = f'''<a class="dropdown-item" href="#" onclick="setActiveRepo('{repo_id}')">
-            {repo_name}
+        color_class = get_repo_color_class(repo)
+        category = get_repo_category(repo)
+        
+        nav_link = f'''<a class="dropdown-item {color_class}" href="#" onclick="setActiveRepo('{repo_id}')" data-category="{category}">
+            <span class="nav-repo-name">{repo_name}</span>
             <span class="badge badge-light ml-auto">{issue_count}</span>
+            <small class="category-indicator {color_class}">{category.upper()}</small>
         </a>'''
         
         # Categorize by language

@@ -65,11 +65,47 @@
         .dropdown-item {
             padding: 0.5rem 1rem;
             transition: all 0.2s;
+            position: relative;
         }
         
         .dropdown-item:hover {
             background: #667eea;
             color: white;
+        }
+        
+        /* Enhanced navigation item styling */
+        .nav-repo-name {
+            font-weight: 500;
+            display: block;
+        }
+        
+        .dropdown-item .badge {
+            font-size: 0.7rem;
+            margin-left: auto;
+        }
+        
+        .dropdown-item.otel-theme {
+            border-left: 3px solid transparent;
+        }
+        
+        .dropdown-item.azure-theme {
+            border-left: 3px solid transparent;
+        }
+        
+        .dropdown-item.microsoft-theme {
+            border-left: 3px solid transparent;
+        }
+        
+        .dropdown-item:not(:hover).otel-theme {
+            border-left-color: #ff6b35;
+        }
+        
+        .dropdown-item:not(:hover).azure-theme {
+            border-left-color: #0078d4;
+        }
+        
+        .dropdown-item:not(:hover).microsoft-theme {
+            border-left-color: #00bcf2;
         }
         
         .dropdown-toggle::after {
@@ -202,6 +238,14 @@
             background: rgba(255,255,255,0.2);
         }
         
+        /* Ensure issue count is visible on themed headers */
+        .repo-header.otel-theme .issue-count,
+        .repo-header.azure-theme .issue-count,
+        .repo-header.microsoft-theme .issue-count {
+            background: rgba(0,0,0,0.7);
+            color: white;
+        }
+        
         .controls {
             padding: 1rem 1.5rem;
             background: #f8f9fa;
@@ -231,6 +275,158 @@
             position: sticky;
             top: 0px; /* Stick to container top */
             z-index: 100;
+        }
+        
+        /* Color themes for different repository categories */
+        /* OpenTelemetry theme - Orange/Red */
+        .otel-theme .issues-table th {
+            background: #ff6b35 !important;
+            border-color: #ff6b35 !important;
+        }
+        
+        .otel-theme .issues-table th.sortable:hover {
+            background: #e55a2b !important;
+        }
+        
+        .repo-header.otel-theme {
+            border-left: 4px solid #ff6b35;
+            background: linear-gradient(90deg, rgba(255, 107, 53, 0.1) 0%, transparent 100%);
+            color: #333 !important;
+        }
+        
+        .repo-header.otel-theme h2,
+        .repo-header.otel-theme h2 a {
+            color: #333 !important;
+        }
+        
+        .repo-header.otel-theme h2 a:hover {
+            color: #ff6b35 !important;
+        }
+        
+        .category-badge.otel-theme {
+            background: #ff6b35;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
+        .dropdown-item.otel-theme:hover {
+            background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%) !important;
+        }
+        
+        .category-indicator.otel-theme {
+            color: #ff6b35;
+            font-weight: 600;
+            display: block;
+            font-size: 0.65rem;
+            margin-top: 2px;
+        }
+        
+        /* Azure theme - Blue */
+        .azure-theme .issues-table th {
+            background: #0078d4 !important;
+            border-color: #0078d4 !important;
+        }
+        
+        .azure-theme .issues-table th.sortable:hover {
+            background: #106ebe !important;
+        }
+        
+        .repo-header.azure-theme {
+            border-left: 4px solid #0078d4;
+            background: linear-gradient(90deg, rgba(0, 120, 212, 0.1) 0%, transparent 100%);
+            color: #333 !important;
+        }
+        
+        .repo-header.azure-theme h2,
+        .repo-header.azure-theme h2 a {
+            color: #333 !important;
+        }
+        
+        .repo-header.azure-theme h2 a:hover {
+            color: #0078d4 !important;
+        }
+        
+        .category-badge.azure-theme {
+            background: #0078d4;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
+        .dropdown-item.azure-theme:hover {
+            background: linear-gradient(135deg, #0078d4 0%, #106ebe 100%) !important;
+        }
+        
+        .category-indicator.azure-theme {
+            color: #0078d4;
+            font-weight: 600;
+            display: block;
+            font-size: 0.65rem;
+            margin-top: 2px;
+        }
+        
+        /* Microsoft theme - Cyan */
+        .microsoft-theme .issues-table th {
+            background: #00bcf2 !important;
+            border-color: #00bcf2 !important;
+        }
+        
+        .microsoft-theme .issues-table th.sortable:hover {
+            background: #0078d4 !important;
+        }
+        
+        .repo-header.microsoft-theme {
+            border-left: 4px solid #00bcf2;
+            background: linear-gradient(90deg, rgba(0, 188, 242, 0.1) 0%, transparent 100%);
+            color: #333 !important;
+        }
+        
+        .repo-header.microsoft-theme h2,
+        .repo-header.microsoft-theme h2 a {
+            color: #333 !important;
+        }
+        
+        .repo-header.microsoft-theme h2 a:hover {
+            color: #00bcf2 !important;
+        }
+        
+        .category-badge.microsoft-theme {
+            background: #00bcf2;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
+        .dropdown-item.microsoft-theme:hover {
+            background: linear-gradient(135deg, #00bcf2 0%, #0078d4 100%) !important;
+        }
+        
+        .category-indicator.microsoft-theme {
+            color: #00bcf2;
+            font-weight: 600;
+            display: block;
+            font-size: 0.65rem;
+            margin-top: 2px;
+        }
+        
+        /* Default theme - Gray */
+        .default-theme .issues-table th {
+            background: #495057 !important;
+            border-color: #495057 !important;
+        }
+        
+        .default-theme .issues-table th.sortable:hover {
+            background: #6c757d !important;
         }
         
         .issues-table th.sortable {
