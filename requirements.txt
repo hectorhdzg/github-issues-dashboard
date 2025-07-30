@@ -14,3 +14,6 @@ gunicorn==21.2.0
 
 # Azure Monitor OpenTelemetry SDK (includes auto-instrumentation)
 azure-monitor-opentelemetry==1.6.0
+# Additional OpenTelemetry dependencies for better compatibility
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0

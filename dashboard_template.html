@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Azure Monitor Scripting SDKs GitHub Issues</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous">
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -16,181 +20,85 @@
             line-height: 1.6;
             color: #333;
             background-color: #f8f9fa;
+            padding-top: 76px; /* Account for fixed navbar */
         }
         
-        .container {
-            max-width: 1400px;
+        .main-container {
+            max-width: 1800px;
             margin: 0 auto;
             padding: 20px;
         }
         
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 2rem;
-            border-radius: 10px;
-            margin-bottom: 2rem;
-            text-align: center;
-            position: sticky;
-            top: 0;
-            z-index: 200;
-        }
-        
-        .header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .header h1:hover {
-            transform: scale(1.02);
-            text-shadow: 0 2px 10px rgba(255,255,255,0.3);
-        }
-        
-        .header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
-        }
-        
-        .navigation {
-            background: white;
-            padding: 1rem 2rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
+        /* Custom navbar styles */
+        .navbar-custom {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            position: sticky;
-            top: 150px;
-            z-index: 150;
         }
         
-        .nav-title {
-            font-size: 1.1rem;
+        .navbar-brand {
+            font-size: 1.5rem;
             font-weight: 600;
-            margin-bottom: 1rem;
-            color: #2d3748;
+            color: white !important;
         }
         
-        .nav-tree {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-        
-        .nav-group {
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            overflow: hidden;
-        }
-        
-        .nav-group-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.75rem 1rem;
-            background: #f7fafc;
-            cursor: pointer;
-            transition: background 0.2s;
-            user-select: none;
-        }
-        
-        .nav-group-header:hover {
-            background: #edf2f7;
-        }
-        
-        .nav-group-title {
-            font-weight: 600;
-            color: #4a5568;
-            font-size: 0.9rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        
-        .nav-group-icon {
-            font-size: 0.8rem;
-            transition: transform 0.2s;
-        }
-        
-        .nav-group-count {
-            background: #e2e8f0;
-            color: #4a5568;
-            padding: 0.2rem 0.5rem;
-            border-radius: 10px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-        
-        .nav-toggle {
-            background: none;
-            border: none;
-            font-size: 1rem;
-            cursor: pointer;
-            color: #4a5568;
-            transition: transform 0.2s;
-        }
-        
-        .nav-group.expanded .nav-toggle {
-            transform: rotate(90deg);
-        }
-        
-        .nav-links {
-            display: none;
-            padding: 0.5rem;
-            background: white;
-            border-top: 1px solid #e2e8f0;
-        }
-        
-        .nav-group.expanded .nav-links {
-            display: block;
-        }
-        
-        .nav-links-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 0.3rem;
-        }
-        
-        .nav-link {
-            padding: 0.4rem 0.8rem;
-            background: #f7fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 4px;
+        .navbar-brand:hover {
+            color: #f8f9fa !important;
             text-decoration: none;
-            color: #4a5568;
-            font-size: 0.8rem;
-            transition: all 0.2s;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
         }
         
-        .nav-link:hover {
+        .navbar-nav .nav-link {
+            color: rgba(255,255,255,0.9) !important;
+            font-weight: 500;
+            margin-right: 1rem;
+        }
+        
+        .navbar-nav .nav-link:hover {
+            color: white !important;
+        }
+        
+        .dropdown-menu {
+            border: none;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+            border-radius: 8px;
+        }
+        
+        .dropdown-item {
+            padding: 0.5rem 1rem;
+            transition: all 0.2s;
+        }
+        
+        .dropdown-item:hover {
             background: #667eea;
             color: white;
-            transform: translateY(-1px);
         }
         
-        .nav-link .issue-count-badge {
-            background: #e2e8f0;
-            color: #4a5568;
-            padding: 0.1rem 0.3rem;
-            border-radius: 8px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            min-width: 20px;
-            text-align: center;
+        .dropdown-toggle::after {
+            margin-left: 0.5rem;
         }
         
-        .nav-link.active {
-            background: #667eea !important;
-            color: white !important;
-            transform: translateY(-1px);
+        .badge-count {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 10px;
+            margin-left: 0.5rem;
         }
         
-        .nav-link.active .issue-count-badge {
-            background: rgba(255,255,255,0.2) !important;
-            color: white !important;
+        .language-icon {
+            margin-right: 0.5rem;
+        }
+        
+        /* Navbar last updated text styling */
+        .navbar-text {
+            font-size: 0.85rem;
+            opacity: 0.9;
+            margin-left: 1rem;
+        }
+        
+        .navbar-text i {
+            margin-right: 0.3rem;
+            opacity: 0.8;
         }
         
         .stats {
@@ -233,22 +141,28 @@
         }
         
         .repo-header {
-            background: #2d3748;
-            color: white;
-            padding: 1rem 2rem;
+            background: #f8f9fa;
+            color: #495057;
+            padding: 1rem 1.5rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: all 0.2s;
+            border: 1px solid #dee2e6;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
         }
         
         .repo-header:hover {
-            background: #4a5568;
+            background: #e9ecef;
+            border-color: #adb5bd;
         }
         
         .repo-header.active {
             background: #667eea;
+            color: white;
+            border-color: #667eea;
         }
         
         .repo-content {
@@ -256,21 +170,44 @@
         }
         
         .repo-name {
-            font-size: 1.3rem;
+            font-size: 1.1rem;
             font-weight: 600;
         }
         
+        .repo-header h2 {
+            font-size: 1.1rem;
+            margin: 0;
+            font-weight: 600;
+        }
+        
+        .repo-header h2 a {
+            color: inherit;
+            text-decoration: none;
+        }
+        
+        .repo-header h2 a:hover {
+            text-decoration: underline;
+        }
+        
         .issue-count {
-            background: #667eea;
-            padding: 0.3rem 0.8rem;
-            border-radius: 20px;
-            font-size: 0.9rem;
+            background: #6c757d;
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            margin-left: 0.5rem;
+        }
+        
+        .repo-header.active .issue-count {
+            background: rgba(255,255,255,0.2);
         }
         
         .controls {
-            padding: 1rem 2rem;
-            background: #f7fafc;
-            border-bottom: 1px solid #e2e8f0;
+            padding: 1rem 1.5rem;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 0.375rem;
+            margin-bottom: 0.1rem;
             display: flex;
             gap: 1rem;
             flex-wrap: wrap;
@@ -278,40 +215,54 @@
         }
         
         .search-box, .filter-select {
-            padding: 0.5rem;
-            border: 1px solid #d1d5db;
-            border-radius: 5px;
-            font-size: 0.9rem;
-        }
-        
-        .search-box {
-            min-width: 300px;
             flex: 1;
+            min-width: 250px;
         }
         
         .issues-table {
-            width: 100%;
-            border-collapse: collapse;
+            margin-bottom: 0;
         }
         
         .issues-table th {
-            background: #4a5568;
-            color: white;
-            padding: 1rem;
-            text-align: left;
+            background: #495057 !important;
+            color: white !important;
+            border-color: #495057 !important;
             font-weight: 600;
             position: sticky;
-            top: 0;
+            top: 0px; /* Stick to container top */
+            z-index: 100;
+        }
+        
+        .issues-table th.sortable {
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 0.2s;
+        }
+        
+        .issues-table th.sortable:hover {
+            background: #6c757d !important;
+        }
+        
+        .sort-icon {
+            margin-left: 0.5rem;
+            opacity: 0.6;
+            font-size: 0.8rem;
+        }
+        
+        .issues-table th.sort-asc .sort-icon:before {
+            content: "\f0de"; /* fa-sort-up */
+            opacity: 1;
+        }
+        
+        .issues-table th.sort-desc .sort-icon:before {
+            content: "\f0dd"; /* fa-sort-down */
+            opacity: 1;
         }
         
         .issues-table td {
-            padding: 1rem;
-            border-bottom: 1px solid #e2e8f0;
-            vertical-align: top;
-        }
-        
-        .issues-table tbody tr:hover {
-            background-color: #f7fafc;
+            vertical-align: middle;
+            padding-top: 0.75rem;
+            padding-bottom: 0.75rem;
         }
         
         .issue-title {
@@ -327,6 +278,63 @@
         .issue-title a:hover {
             color: #667eea;
             text-decoration: underline;
+        }
+        
+        .issue-title-link {
+            color: #2d3748 !important;
+            text-decoration: none !important;
+            cursor: pointer;
+            transition: color 0.2s ease;
+        }
+        
+        .issue-title-link:hover {
+            color: #667eea !important;
+            text-decoration: underline !important;
+        }
+        
+        /* Modal styling */
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom: none;
+        }
+        
+        .modal-header .close {
+            color: white;
+            opacity: 0.8;
+        }
+        
+        .modal-header .close:hover {
+            opacity: 1;
+        }
+        
+        .modal-title {
+            font-weight: 600;
+        }
+        
+        .modal-body {
+            padding: 2rem;
+        }
+        
+        .issue-info label {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
+        }
+        
+        .modal-footer {
+            border-top: 1px solid #e9ecef;
+            padding: 1rem 2rem;
+        }
+        
+        .custom-control-label {
+            font-weight: normal;
+            color: #495057;
+        }
+        
+        .btn-outline-primary {
+            font-size: 0.8rem;
         }
         
         .issue-number {
@@ -357,102 +365,14 @@
             background: #38a169;
         }
         
-        .triage-checkbox {
-            transform: scale(1.2);
-            cursor: pointer;
+        .triage-display {
+            font-size: 0.9rem;
+            font-weight: 500;
         }
         
-        .priority-select {
-            padding: 0.3rem 0.5rem;
-            border: 1px solid #d1d5db;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            cursor: pointer;
-            min-width: 120px;
-        }
-        
-        .save-btn {
-            background: #48bb78;
-            color: white;
-            border: none;
-            padding: 0.4rem 0.8rem;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            position: relative;
-            min-width: 80px;
-            display: none;
-        }
-        
-        .save-btn:hover {
-            background: #38a169;
-            transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(72, 187, 120, 0.4);
-        }
-        
-        .save-btn:disabled {
-            background: #cbd5e0;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-        
-        .save-btn.saving {
-            background: #4299e1;
-            animation: pulse 1.5s infinite;
-        }
-        
-        .save-btn.success {
-            background: #48bb78;
-            animation: none;
-        }
-        
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.7; }
-            100% { opacity: 1; }
-        }
-        
-        @keyframes fadeIn {
-            0% { 
-                opacity: 0; 
-                transform: scale(0.8); 
-            }
-            100% { 
-                opacity: 1; 
-                transform: scale(1); 
-            }
-        }
-        
-        .actions-cell {
-            position: relative;
-            min-width: 120px;
-        }
-        
-        .save-feedback {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #48bb78;
-            color: white;
-            padding: 0.3rem 0.6rem;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            opacity: 0;
-            transition: all 0.3s ease;
-            pointer-events: none;
-            z-index: 10;
-        }
-        
-        .save-feedback.show {
-            opacity: 1;
-            transform: translate(-50%, -50%) scale(1.1);
-        }
-        
-        .row-dirty {
-            background-color: #fef5e7 !important;
+        .priority-display {
+            font-size: 0.9rem;
+            font-weight: 500;
         }
         
         .recent { background-color: #c6f6d5 !important; }
@@ -482,12 +402,6 @@
             border-radius: 4px;
         }
         
-        .priority-select, .triage-checkbox {
-            padding: 0.3rem;
-            border: 1px solid #d1d5db;
-            border-radius: 3px;
-        }
-        
         .no-issues {
             text-align: center;
             padding: 3rem;
@@ -496,52 +410,224 @@
         }
         
         .pagination {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 1rem 2rem;
-            background: #f7fafc;
-            border-top: 1px solid #e2e8f0;
+            padding: 1rem 1.5rem;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
         }
         
-        .pagination-info {
-            color: #4a5568;
-            font-size: 0.9rem;
+        /* Bootstrap spacing fallback */
+        .me-2 {
+            margin-right: 0.5rem !important;
         }
         
-        .pagination-controls {
-            display: flex;
-            gap: 0.5rem;
-            align-items: center;
+        /* Intro page styles */
+        .intro-page {
+            display: block;
+            animation: fadeInUp 0.6s ease-out;
         }
         
-        .pagination-btn {
-            padding: 0.5rem 1rem;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            transition: background 0.2s;
+        .intro-page.hidden {
+            display: none;
         }
         
-        .pagination-btn:hover:not(:disabled) {
-            background: #5a67d8;
+        .intro-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
         }
         
-        .pagination-btn:disabled {
-            background: #cbd5e0;
-            cursor: not-allowed;
-        }
-        
-        .page-input {
-            width: 60px;
-            padding: 0.3rem;
-            border: 1px solid #d1d5db;
-            border-radius: 3px;
+        .intro-header {
             text-align: center;
+            margin-bottom: 3rem;
+        }
+        
+        .intro-icon {
+            font-size: 4rem;
+            color: #667eea;
+            margin-bottom: 1rem;
+        }
+        
+        .intro-header h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .intro-subtitle {
+            font-size: 1.2rem;
+            color: #666;
+            margin-bottom: 0;
+        }
+        
+        .intro-features {
+            margin-bottom: 3rem;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .feature-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+        }
+        
+        .feature-icon {
+            font-size: 2.5rem;
+            color: #667eea;
+            margin-bottom: 1rem;
+        }
+        
+        .feature-card h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 1rem;
+        }
+        
+        .feature-card p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 0;
+        }
+        
+        .intro-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+        
+        .action-section {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        
+        .action-section h3 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 1rem;
+        }
+        
+        .action-section p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+        }
+        
+        .nav-hint {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #667eea;
+            font-weight: 500;
+            padding: 1rem;
+            background: rgba(102, 126, 234, 0.1);
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .nav-hint i {
+            font-size: 1.2rem;
+        }
+        
+        .github-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: #24292e;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+        
+        .github-link:hover {
+            background: #1a1e22;
+            color: white;
+            text-decoration: none;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(36, 41, 46, 0.3);
+        }
+        
+        .github-link i {
+            font-size: 1.2rem;
+        }
+        
+        .intro-stats {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .intro-stats h3 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 2rem;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 2rem;
+        }
+        
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #667eea;
+            line-height: 1;
+        }
+        
+        .stat-label {
             font-size: 0.9rem;
+            color: #666;
+            margin-top: 0.5rem;
+            font-weight: 500;
+        }
+        
+        @keyframes fadeInUp {
+            0% {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
         @media (max-width: 768px) {
@@ -572,13 +658,17 @@
             }
             
             .pagination {
-                flex-direction: column;
+                padding: 1rem;
+            }
+            
+            .pagination .d-flex {
+                flex-direction: column !important;
                 gap: 1rem;
                 text-align: center;
             }
             
             .pagination-controls {
-                justify-content: center;
+                justify-content: center !important;
             }
         }
     </style>
@@ -587,6 +677,114 @@
         const pageStates = {};
         const itemsPerPage = 10;
         let activeRepoId = null;
+        
+        // Sorting state for each table
+        const sortStates = {};
+        
+        function initializeSorting(repoId) {
+            if (!sortStates[repoId]) {
+                sortStates[repoId] = {
+                    column: null,
+                    direction: 'asc'
+                };
+            }
+        }
+        
+        function sortTable(repoId, column) {
+            initializeSorting(repoId);
+            const sortState = sortStates[repoId];
+            const table = document.getElementById('table-' + repoId);
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            // Toggle direction if same column, else reset to ascending
+            if (sortState.column === column) {
+                sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortState.direction = 'asc';
+            }
+            sortState.column = column;
+            
+            // Update header styling
+            updateSortHeaders(repoId);
+            
+            // Sort rows based on column and direction
+            rows.sort((a, b) => {
+                let aVal = getSortValue(a, column);
+                let bVal = getSortValue(b, column);
+                
+                // Handle different data types
+                if (column === 'number' || column === 'priority' || column === 'triage') {
+                    aVal = parseInt(aVal) || 0;
+                    bVal = parseInt(bVal) || 0;
+                } else if (column === 'created' || column === 'updated') {
+                    aVal = new Date(aVal);
+                    bVal = new Date(bVal);
+                }
+                
+                let result;
+                if (aVal < bVal) result = -1;
+                else if (aVal > bVal) result = 1;
+                else result = 0;
+                
+                return sortState.direction === 'desc' ? -result : result;
+            });
+            
+            // Re-append sorted rows
+            rows.forEach(row => tbody.appendChild(row));
+            
+            // Update pagination after sorting
+            const state = pageStates[repoId];
+            if (state) {
+                showPage(repoId, state.currentPage);
+            }
+            
+            // Ensure first visible row is not hidden behind sticky header
+            setTimeout(() => {
+                const firstVisibleRow = tbody.querySelector('tr:not(.pagination-hidden)');
+                if (firstVisibleRow) {
+                    firstVisibleRow.scrollIntoView({ 
+                        behavior: 'instant', 
+                        block: 'nearest',
+                        inline: 'nearest'
+                    });
+                }
+            }, 50);
+        }
+        
+        function getSortValue(row, column) {
+            switch (column) {
+                case 'number':
+                    return row.dataset.number;
+                case 'title':
+                    return row.dataset.title;
+                case 'assignee':
+                    return row.dataset.assignee;
+                case 'created':
+                    return row.dataset.created;
+                case 'updated':
+                    return row.dataset.updated;
+                case 'triage':
+                    return row.dataset.triage;
+                case 'priority':
+                    return row.dataset.priority;
+                default:
+                    return '';
+            }
+        }
+        
+        function updateSortHeaders(repoId) {
+            const table = document.getElementById('table-' + repoId);
+            const headers = table.querySelectorAll('th.sortable');
+            const sortState = sortStates[repoId];
+            
+            headers.forEach(header => {
+                header.classList.remove('sort-asc', 'sort-desc');
+                if (header.dataset.column === sortState.column) {
+                    header.classList.add('sort-' + sortState.direction);
+                }
+            });
+        }
         
         function initializePagination(repoId, totalItems) {
             if (!pageStates[repoId]) {
@@ -597,6 +795,9 @@
                     filteredItems: totalItems
                 };
             }
+            initializeSorting(repoId);
+            
+            // For performance, hide all rows initially except first page
             showPage(repoId, 1);
         }
         
@@ -664,7 +865,20 @@
         }
         
         function goToPage(repoId, page) {
-            showPage(repoId, parseInt(page));
+            const state = pageStates[repoId];
+            if (!state) return;
+            
+            const pageNum = parseInt(page);
+            if (isNaN(pageNum) || pageNum < 1 || pageNum > state.totalPages) {
+                // Reset input to current page if invalid
+                const pageInput = document.getElementById('page-input-' + repoId);
+                if (pageInput) {
+                    pageInput.value = state.currentPage;
+                }
+                return;
+            }
+            
+            showPage(repoId, pageNum);
         }
         
         function nextPage(repoId) {
@@ -701,12 +915,13 @@
             showPage(repoId, 1);
         }
         
-        function toggleNavGroup(groupId) {
-            const group = document.getElementById(groupId);
-            group.classList.toggle('expanded');
-        }
-        
         function setActiveRepo(repoId) {
+            // Hide intro page
+            const introPage = document.getElementById('intro-page');
+            if (introPage) {
+                introPage.classList.add('hidden');
+            }
+            
             // Hide all repo sections and remove active class
             document.querySelectorAll('.repo-section').forEach(section => {
                 section.classList.remove('active');
@@ -714,15 +929,9 @@
             document.querySelectorAll('.repo-header').forEach(header => {
                 header.classList.remove('active');
             });
-            document.querySelectorAll('.nav-link').forEach(link => {
+            document.querySelectorAll('.dropdown-item').forEach(link => {
                 link.classList.remove('active');
             });
-            
-            // Hide welcome section
-            const welcomeSection = document.getElementById('welcome-section');
-            if (welcomeSection) {
-                welcomeSection.style.display = 'none';
-            }
             
             // Show the selected repo section and mark header as active
             const repoSection = document.getElementById('repo-' + repoId);
@@ -743,32 +952,30 @@
                 newUrl.searchParams.set('repo', repoName);
                 window.history.replaceState({}, '', newUrl);
                 
-                // Update active repo indicator
-                const indicator = document.getElementById('active-repo-indicator');
-                const repoNameSpan = document.getElementById('active-repo-name');
-                const repoDisplayName = header.querySelector('.repo-name') ? header.querySelector('.repo-name').textContent : header.querySelector('a').textContent;
-                if (indicator && repoNameSpan) {
-                    indicator.style.display = 'block';
-                    repoNameSpan.textContent = repoDisplayName;
-                }
+                // Close the dropdown menu after selection
+                $('.dropdown-menu').dropdown('hide');
                 
                 // Initialize pagination for the active repo
                 const table = document.getElementById('table-' + repoId);
                 if (table) {
                     const rows = table.getElementsByTagName('tr');
                     const totalIssues = rows.length - 1; // Subtract header row
-                    initializePagination(repoId, totalIssues);
+                    
+                    // Only initialize pagination if there are issues
+                    if (totalIssues > 0) {
+                        initializePagination(repoId, totalIssues);
+                        // Setup page input handlers for this repo
+                        setupPageInputHandlers();
+                    }
                 }
                 
                 // Scroll to the repo section
-                repoSection.scrollIntoView({ 
-                    behavior: 'smooth', 
-                    block: 'start' 
+                repoSection.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
                 });
             }
-        }
-        
-        function toggleSection(repoId) {
+        }        function toggleSection(repoId) {
             // Always use setActiveRepo for consistent behavior
             setActiveRepo(repoId);
         }
@@ -778,6 +985,12 @@
         }
         
         function clearRepoSelection() {
+            // Show intro page
+            const introPage = document.getElementById('intro-page');
+            if (introPage) {
+                introPage.classList.remove('hidden');
+            }
+            
             // Hide all repo sections and remove active class
             document.querySelectorAll('.repo-section').forEach(section => {
                 section.classList.remove('active');
@@ -785,22 +998,12 @@
             document.querySelectorAll('.repo-header').forEach(header => {
                 header.classList.remove('active');
             });
-            document.querySelectorAll('.nav-link').forEach(link => {
+            document.querySelectorAll('.dropdown-item').forEach(link => {
                 link.classList.remove('active');
             });
             
             // Hide active repo indicator
             const indicator = document.getElementById('active-repo-indicator');
-            if (indicator) {
-                indicator.style.display = 'none';
-            }
-            
-            // Show welcome section
-            const welcomeSection = document.getElementById('welcome-section');
-            if (welcomeSection) {
-                welcomeSection.style.display = 'block';
-            }
-            
             // Clear URL parameter
             const newUrl = new URL(window.location);
             newUrl.searchParams.delete('repo');
@@ -809,13 +1012,31 @@
             activeRepoId = null;
         }
         
+        // Add keyboard event handler for page inputs
+        function setupPageInputHandlers() {
+            document.querySelectorAll('.page-input').forEach(input => {
+                input.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        const repoId = this.id.replace('page-input-', '');
+                        goToPage(repoId, this.value);
+                    }
+                });
+                
+                // Also handle blur event for when user clicks away
+                input.addEventListener('blur', function() {
+                    const repoId = this.id.replace('page-input-', '');
+                    goToPage(repoId, this.value);
+                });
+            });
+        }
+        
         // No auto-selection of repositories - user must choose manually
         document.addEventListener('DOMContentLoaded', function() {
-            // Hide the active repo indicator initially
-            const indicator = document.getElementById('active-repo-indicator');
-            if (indicator) {
-                indicator.style.display = 'none';
-            }
+            // Setup page input handlers
+            setupPageInputHandlers();
+            
+            // Update intro page statistics
+            updateIntroStats();
             
             // Check if there's a selected repo from query parameter
             const selectedRepo = '{selected_repo}';
@@ -831,54 +1052,81 @@
                 }
             }
             
-            // Ensure welcome section is visible initially if no valid repo was selected
-            const welcomeSection = document.getElementById('welcome-section');
-            if (welcomeSection) {
-                welcomeSection.style.display = 'block';
+            // If no repo selected, ensure intro page is visible
+            const introPage = document.getElementById('intro-page');
+            if (introPage) {
+                introPage.classList.remove('hidden');
             }
         });
         
-        // Functions for handling editable fields
-        function markDirty(element) {
-            const row = element.closest('tr');
-            row.classList.add('row-dirty');
-            const saveBtn = row.querySelector('.save-btn');
-            if (saveBtn) {
-                saveBtn.style.display = 'inline-block';
-                saveBtn.textContent = 'Save Changes';
-                saveBtn.classList.remove('saving', 'success');
-                
-                // Add a subtle animation to draw attention
-                saveBtn.style.animation = 'fadeIn 0.3s ease';
-                setTimeout(() => {
-                    saveBtn.style.animation = '';
-                }, 300);
-            }
+        // Function to update intro page statistics
+        function updateIntroStats() {
+            // Get counts from navbar badges
+            const nodejsCount = document.getElementById('navbar-nodejs-count')?.textContent || '0';
+            const pythonCount = document.getElementById('navbar-python-count')?.textContent || '0';
+            const browserCount = document.getElementById('navbar-browser-count')?.textContent || '0';
+            
+            // Calculate total
+            const totalCount = parseInt(nodejsCount) + parseInt(pythonCount) + parseInt(browserCount);
+            
+            // Update intro page stats
+            const introNodejsCount = document.getElementById('intro-nodejs-count');
+            const introPythonCount = document.getElementById('intro-python-count');
+            const introBrowserCount = document.getElementById('intro-browser-count');
+            const introTotalCount = document.getElementById('intro-total-count');
+            
+            if (introNodejsCount) introNodejsCount.textContent = nodejsCount;
+            if (introPythonCount) introPythonCount.textContent = pythonCount;
+            if (introBrowserCount) introBrowserCount.textContent = browserCount;
+            if (introTotalCount) introTotalCount.textContent = totalCount.toString();
         }
         
-        function saveIssueChanges(button) {
-            console.log('🔄 Save button clicked');
-            const row = button.closest('tr');
-            const repo = row.dataset.repo;
-            const number = row.dataset.number;
-            const triage = row.querySelector('.triage-checkbox').checked;
-            const priority = row.querySelector('.priority-select').value;
+        // Modal-related variables
+        let currentModalIssue = null;
+        
+        // Function to open issue modal
+        function openIssueModal(repo, number, title, htmlUrl, triage, priority) {
+            // Store current issue data
+            currentModalIssue = {
+                repo: repo,
+                number: number,
+                title: title,
+                htmlUrl: htmlUrl,
+                triage: triage,
+                priority: priority
+            };
             
-            console.log('📝 Saving data:', { repo, number, triage, priority });
+            // Populate modal fields
+            document.getElementById('modal-issue-number').textContent = '#' + number;
+            document.getElementById('modal-github-link').href = htmlUrl;
+            document.getElementById('modal-issue-title').textContent = title;
+            document.getElementById('modal-triage').checked = triage == 1;
+            document.getElementById('modal-priority').value = priority;
             
-            // Enhanced visual feedback during save
-            button.disabled = true;
-            button.textContent = '💾 Saving...';
-            button.classList.add('saving');
+            // Reset save button state
+            const saveBtn = document.getElementById('modal-save-btn');
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+            saveBtn.className = 'btn btn-success';
             
-            // Create and show feedback element
-            const actionsCell = button.closest('td');
-            let feedback = actionsCell.querySelector('.save-feedback');
-            if (!feedback) {
-                feedback = document.createElement('div');
-                feedback.className = 'save-feedback';
-                actionsCell.appendChild(feedback);
-            }
+            // Show modal
+            $('#issueModal').modal('show');
+        }
+        
+        // Function to save modal changes
+        function saveModalChanges() {
+            if (!currentModalIssue) return;
+            
+            const saveBtn = document.getElementById('modal-save-btn');
+            const triage = document.getElementById('modal-triage').checked;
+            const priority = parseInt(document.getElementById('modal-priority').value);
+            
+            // Update button state to show saving
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+            saveBtn.className = 'btn btn-primary';
+            
+            console.log('🔄 Saving modal changes for issue #' + currentModalIssue.number);
             
             fetch('/api/update_issue', {
                 method: 'POST',
@@ -886,175 +1134,280 @@
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    repo: repo,
-                    number: parseInt(number),
+                    repo: currentModalIssue.repo,
+                    number: currentModalIssue.number,
                     triage: triage,
-                    priority: parseInt(priority)
+                    priority: priority
                 })
             })
-            .then(response => {
-                console.log('📨 Response received:', response.status);
-                return response.json();
-            })
+            .then(response => response.json())
             .then(data => {
-                console.log('📊 Response data:', data);
+                console.log('📊 Modal save response:', data);
                 if (data.status === 'success') {
-                    // Success animation
-                    row.classList.remove('row-dirty');
-                    button.classList.remove('saving');
-                    button.classList.add('success');
-                    button.textContent = '✅ Saved!';
-                    button.disabled = false;
+                    // Success state
+                    saveBtn.innerHTML = '<i class="fas fa-check"></i> Saved!';
+                    saveBtn.className = 'btn btn-success';
                     
-                    // Show success feedback
-                    feedback.textContent = '✓ Changes saved!';
-                    feedback.style.background = '#48bb78';
-                    feedback.classList.add('show');
+                    // Update the original table row
+                    updateTableRow(currentModalIssue.repo, currentModalIssue.number, triage, priority);
                     
-                    // Hide feedback and button after delay
+                    // Close modal after 1 second
                     setTimeout(() => {
-                        feedback.classList.remove('show');
-                        setTimeout(() => {
-                            button.style.display = 'none';
-                            button.textContent = 'Save Changes';
-                            button.classList.remove('success');
-                        }, 300);
-                    }, 2000);
+                        $('#issueModal').modal('hide');
+                    }, 1000);
                 } else {
                     // Error state
-                    button.classList.remove('saving');
-                    button.disabled = false;
-                    button.textContent = '❌ Error';
-                    button.style.background = '#e53e3e';
-                    
-                    feedback.textContent = '❌ Save failed';
-                    feedback.style.background = '#e53e3e';
-                    feedback.classList.add('show');
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error';
+                    saveBtn.className = 'btn btn-danger';
                     
                     setTimeout(() => {
-                        feedback.classList.remove('show');
-                        button.textContent = 'Save Changes';
-                        button.style.background = '';
+                        saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+                        saveBtn.className = 'btn btn-success';
                     }, 3000);
                     
                     alert('Error saving changes: ' + data.error);
                 }
             })
             .catch(error => {
-                console.error('❌ Error:', error);
+                console.error('❌ Modal save error:', error);
                 
                 // Error state
-                button.classList.remove('saving');
-                button.disabled = false;
-                button.textContent = '❌ Error';
-                button.style.background = '#e53e3e';
-                
-                feedback.textContent = '❌ Network error';
-                feedback.style.background = '#e53e3e';
-                feedback.classList.add('show');
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Error';
+                saveBtn.className = 'btn btn-danger';
                 
                 setTimeout(() => {
-                    feedback.classList.remove('show');
-                    button.textContent = 'Save Changes';
-                    button.style.background = '';
+                    saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+                    saveBtn.className = 'btn btn-success';
                 }, 3000);
                 
                 alert('Error saving changes: ' + error.message);
             });
+        }
+        
+        // Function to update table row after modal save
+        function updateTableRow(repo, number, triage, priority) {
+            // Find the table row
+            const row = document.querySelector(`tr[data-repo="${repo}"][data-number="${number}"]`);
+            if (row) {
+                // Update triage display
+                const triageDisplay = row.querySelector('.triage-display');
+                if (triageDisplay) {
+                    if (triage) {
+                        triageDisplay.innerHTML = '<i class="fas fa-check text-success" title="Triaged"></i>';
+                    } else {
+                        triageDisplay.innerHTML = '<span class="text-muted" title="Not triaged">—</span>';
+                    }
+                }
+                
+                // Update priority display
+                const priorityDisplay = row.querySelector('.priority-display');
+                if (priorityDisplay) {
+                    const priorityMap = {
+                        '-1': 'Not Set',
+                        '0': '0 - Critical',
+                        '1': '1 - High',
+                        '2': '2 - Medium',
+                        '3': '3 - Low',
+                        '4': '4 - Minimal'
+                    };
+                    priorityDisplay.textContent = priorityMap[priority.toString()] || 'Unknown';
+                }
+                
+                // Update data attributes
+                row.dataset.triage = triage ? '1' : '0';
+                row.dataset.priority = priority.toString();
+            }
         }
     </script>
     <style>
         .pagination-hidden {
             display: none !important;
         }
+        
+        /* Ensure proper table layout */
+        .table-container {
+            overflow-x: auto;
+            max-height: 80vh;
+            margin-top: 0.1rem;
+            padding-top: 0; /* Remove padding to prevent overlap */
+            position: relative;
+        }
+        
+        .issues-table {
+            table-layout: fixed;
+            width: 100%;
+            margin-bottom: 0;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        
+        .issues-table th:nth-child(1) { width: 6%; }  /* Edit */
+        .issues-table th:nth-child(2) { width: 44%; } /* Title (with issue number) */
+        .issues-table th:nth-child(3) { width: 13%; } /* Assignee */
+        .issues-table th:nth-child(4) { width: 13%; } /* Related PRs */
+        .issues-table th:nth-child(5) { width: 10%; } /* Created */
+        .issues-table th:nth-child(6) { width: 10%; } /* Updated */
+        .issues-table th:nth-child(7) { width: 4%; text-align: center; }  /* Triage */
+        .issues-table th:nth-child(8) { width: 10%; } /* Priority */
+        
+        /* Triage column styling */
+        .triage-display {
+            text-align: center;
+            font-size: 14px;
+        }
+        
+        /* Edit button styling */
+        .edit-btn {
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 4px;
+        }
+        
+        .edit-btn:hover {
+            background-color: #007bff;
+            color: white;
+        }
+        
+        /* Performance optimization for large tables */
+        .repo-section:not(.active) {
+            visibility: hidden;
+            height: 0;
+            overflow: hidden;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1 onclick="clearRepoSelection()">🐛 Azure Monitor Scripting SDKs GitHub Issues</h1>
-            {database_info}
-        </div>
-        
-        <div class="navigation">
-            <div id="active-repo-indicator" style="background: #e6fffa; border: 1px solid #38b2ac; padding: 0.5rem 1rem; border-radius: 5px; margin-bottom: 1rem; color: #234e52; font-size: 0.9rem; display: none;">
-            </div>
-            <div class="nav-tree">
-                <div class="nav-group" id="nodejs-group">
-                    <div class="nav-group-header" onclick="toggleNavGroup('nodejs-group')">
-                        <div class="nav-group-title">
-                            <span class="nav-group-icon">📦</span>
-                            Node.js / Server-side JavaScript
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <span class="nav-group-count" id="nodejs-count">0</span>
-                            <button class="nav-toggle">▶</button>
-                        </div>
-                    </div>
-                    <div class="nav-links">
-                        <div class="nav-links-grid">
+    <!-- Bootstrap Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark fixed-top navbar-custom">
+        <div class="container">
+            <a class="navbar-brand" href="#" onclick="clearRepoSelection()">
+                <i class="fas fa-bug"></i> Azure Monitor GitHub Issues
+            </a>
+            
+            <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav mr-auto">
+                    <!-- Node.js Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="nodejsDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <i class="fab fa-node-js language-icon"></i>Node.js
+                            <span class="badge badge-count" id="navbar-nodejs-count">0</span>
+                        </a>
+                        <div class="dropdown-menu" aria-labelledby="nodejsDropdown" id="nodejs-dropdown-menu">
                             {nodejs_nav_links}
                         </div>
-                    </div>
-                </div>
-                <div class="nav-group" id="python-group">
-                    <div class="nav-group-header" onclick="toggleNavGroup('python-group')">
-                        <div class="nav-group-title">
-                            <span class="nav-group-icon">🐍</span>
-                            Python
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <span class="nav-group-count" id="python-count">0</span>
-                            <button class="nav-toggle">▶</button>
-                        </div>
-                    </div>
-                    <div class="nav-links">
-                        <div class="nav-links-grid">
+                    </li>
+                    
+                    <!-- Python Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="pythonDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <i class="fab fa-python language-icon"></i>Python
+                            <span class="badge badge-count" id="navbar-python-count">0</span>
+                        </a>
+                        <div class="dropdown-menu" aria-labelledby="pythonDropdown" id="python-dropdown-menu">
                             {python_nav_links}
                         </div>
+                    </li>
+                    
+                    <!-- Browser JS Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="browserDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <i class="fas fa-globe language-icon"></i>Browser JS
+                            <span class="badge badge-count" id="navbar-browser-count">0</span>
+                        </a>
+                        <div class="dropdown-menu" aria-labelledby="browserDropdown" id="browser-dropdown-menu">
+                            {browser_nav_links}
+                        </div>
+                    </li>
+                </ul>
+                
+                <ul class="navbar-nav ml-auto">
+                    <li class="nav-item">
+                        <span class="navbar-text text-light" id="navbar-last-updated">
+                            <i class="fas fa-clock"></i> {database_info_text}
+                        </span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <!-- Intro page shown when no repo is selected -->
+        <div id="intro-page" class="intro-page">
+            <div class="intro-content">
+                <div class="intro-header">
+                    <i class="fas fa-bug intro-icon"></i>
+                    <h1>Azure Monitor GitHub Issues Dashboard</h1>
+                    <p class="intro-subtitle">Track and manage GitHub issues across Azure Monitor scripting SDKs</p>
+                </div>
+                
+                <div class="intro-actions">
+                    <div class="action-section">
+                        <h3>Get Started</h3>
+                        <p>Select a repository from the navigation menu above to view and manage its issues.</p>
+                        <div class="nav-hint">
+                            <i class="fas fa-arrow-up"></i>
+                            <span>Choose from Node.js, Python, or Browser JS repositories</span>
+                        </div>
+                    </div>
+                    
+                    <div class="action-section">
+                        <h3>About This Project</h3>
+                        <p>This dashboard is built to help manage GitHub issues across Azure Monitor scripting SDKs.</p>
+                        <a href="https://github.com/hectorhdzg/github-issues-dashboard" target="_blank" class="github-link">
+                            <i class="fab fa-github"></i>
+                            View on GitHub
+                        </a>
                     </div>
                 </div>
-                <div class="nav-group" id="browser-group">
-                    <div class="nav-group-header" onclick="toggleNavGroup('browser-group')">
-                        <div class="nav-group-title">
-                            <span class="nav-group-icon">🌐</span>
-                            Browser JavaScript / Client-side
+                
+                <div class="intro-stats">
+                    <h3>Repository Overview</h3>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-number" id="intro-nodejs-count">0</span>
+                            <span class="stat-label">Node.js Issues</span>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <span class="nav-group-count" id="browser-count">0</span>
-                            <button class="nav-toggle">▶</button>
+                        <div class="stat-item">
+                            <span class="stat-number" id="intro-python-count">0</span>
+                            <span class="stat-label">Python Issues</span>
                         </div>
-                    </div>
-                    <div class="nav-links">
-                        <div class="nav-links-grid">
-                            {browser_nav_links}
+                        <div class="stat-item">
+                            <span class="stat-number" id="intro-browser-count">0</span>
+                            <span class="stat-label">Browser JS Issues</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number" id="intro-total-count">0</span>
+                            <span class="stat-label">Total Issues</span>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
         
-        <!-- Welcome section shown when no repository is selected -->
-        <div class="welcome-section" id="welcome-section">
-            <div style="background: white; border-radius: 10px; padding: 3rem; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.1); margin-bottom: 2rem;">
-                <h2 style="color: #667eea; margin-bottom: 1rem; font-size: 2rem;">🚀 Welcome to the GitHub Issues Dashboard</h2>
-                <p style="color: #666; font-size: 1.1rem; margin-bottom: 2rem; max-width: 600px; margin-left: auto; margin-right: auto;">
-                    Select a repository from the navigation above to view its GitHub issues. You can browse issues by language category and manage triage status and priorities.
-                </p>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 2rem;">
-                    <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #667eea;">
-                        <h3 style="color: #2d3748; margin-bottom: 0.5rem;">📦 Node.js</h3>
-                        <p style="color: #666; font-size: 0.9rem;">Server-side JavaScript repositories</p>
-                    </div>
-                    <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #48bb78;">
-                        <h3 style="color: #2d3748; margin-bottom: 0.5rem;">🐍 Python</h3>
-                        <p style="color: #666; font-size: 0.9rem;">Python SDK repositories</p>
-                    </div>
-                    <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #ed8936;">
-                        <h3 style="color: #2d3748; margin-bottom: 0.5rem;">🌐 Browser JavaScript</h3>
-                        <p style="color: #666; font-size: 0.9rem;">Client-side JavaScript repositories</p>
-                    </div>
-                </div>
+        <!-- Color Legend for Date Aging -->
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color recent"></div>
+                <span>Recent (0-14 days)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color medium"></div>
+                <span>Medium (2-4 weeks)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color old"></div>
+                <span>Old (1-2 months)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color stale"></div>
+                <span>Stale (2+ months)</span>
             </div>
         </div>
         
@@ -1062,5 +1415,87 @@
         
         {group_counts_script}
     </div>
+    
+    <!-- Issue Details Modal -->
+    <div class="modal fade" id="issueModal" tabindex="-1" role="dialog" aria-labelledby="issueModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="issueModalLabel">
+                        <i class="fas fa-bug"></i> Issue Details
+                    </h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="issue-info">
+                        <div class="mb-3">
+                            <label class="font-weight-bold text-muted">Issue #</label>
+                            <div class="d-flex align-items-center">
+                                <span id="modal-issue-number" class="issue-number mr-2"></span>
+                                <a id="modal-github-link" href="#" target="_blank" class="btn btn-sm btn-outline-primary">
+                                    <i class="fab fa-github"></i> View on GitHub
+                                </a>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="font-weight-bold text-muted">Title</label>
+                            <h6 id="modal-issue-title" class="mt-1"></h6>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="modal-triage" class="font-weight-bold">
+                                        <i class="fas fa-check-circle"></i> Triage Status
+                                    </label>
+                                    <div class="custom-control custom-checkbox">
+                                        <input type="checkbox" class="custom-control-input" id="modal-triage">
+                                        <label class="custom-control-label" for="modal-triage">Issue has been triaged</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="modal-priority" class="font-weight-bold">
+                                        <i class="fas fa-exclamation-triangle"></i> Priority
+                                    </label>
+                                    <select class="form-control" id="modal-priority">
+                                        <option value="-1">Not Set</option>
+                                        <option value="0">0 - Critical</option>
+                                        <option value="1">1 - High</option>
+                                        <option value="2">2 - Medium</option>
+                                        <option value="3">3 - Low</option>
+                                        <option value="4">4 - Minimal</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-3">
+                            <small class="text-muted">
+                                <i class="fas fa-info-circle"></i> 
+                                Changes will be saved to the local database when you click Save.
+                            </small>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                    <button type="button" class="btn btn-success" id="modal-save-btn" onclick="saveModalChanges()">
+                        <i class="fas fa-save"></i> Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Bootstrap JavaScript -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-Fy6S3B9q64WdZWQUiU+q4/2Lc9npb8tCaSX9FK7E8HnRr0Jz8D6OP9dO5Vg3Q9ct" crossorigin="anonymous"></script>
 </body>
 </html>

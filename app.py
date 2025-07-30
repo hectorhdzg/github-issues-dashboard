@@ -10,6 +10,7 @@ import threading
 import time
 import requests
 import schedule
+import html
 from flask import Flask, render_template_string, jsonify, request
 import sqlite3
 import json
@@ -19,42 +20,79 @@ from urllib.parse import unquote
 # Azure Monitor OpenTelemetry SDK imports
 from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry import trace, metrics
+import logging
+
+# Set up logging to help debug telemetry issues
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Configure Azure Monitor OpenTelemetry with auto-instrumentation
 connection_string = os.environ.get('APPLICATIONINSIGHTS_CONNECTION_STRING')
 if connection_string:
     print(f"🔧 Configuring Azure Monitor OpenTelemetry with connection string: {connection_string[:50]}...")
-    # Azure Monitor auto-instruments Flask, requests, SQLite, and more automatically
-    configure_azure_monitor(
-        connection_string=connection_string,
-        # Auto-instrumentation is enabled by default and includes:
-        # - Flask (HTTP requests, responses)
-        # - Requests (outbound HTTP calls)
-        # - SQLite3 (database operations)
-        # - Logging (application logs)
-        # - And many more libraries automatically
-    )
+    logger.info(f"Azure Monitor connection string detected (length: {len(connection_string)})")
     
-    # Get tracer and meter for custom telemetry only
-    tracer = trace.get_tracer(__name__)
-    meter = metrics.get_meter(__name__)
-    
-    # Create custom metrics for business logic
-    issue_counter = meter.create_counter(
-        name="github_issues_processed",
-        description="Number of GitHub issues processed",
-        unit="1"
-    )
-    
-    repo_counter = meter.create_counter(
-        name="repository_sections_rendered",
-        description="Number of repository sections rendered",
-        unit="1"
-    )
-    
-    print("✅ Azure Monitor OpenTelemetry configured with auto-instrumentation")
+    try:
+        # Configure Azure Monitor with additional settings for better reliability
+        configure_azure_monitor(
+            connection_string=connection_string,
+            # Auto-instrumentation is enabled by default and includes:
+            # - Flask (HTTP requests, responses)
+            # - Requests (outbound HTTP calls)
+            # - SQLite3 (database operations)
+            # - Logging (application logs)
+            # - And many more libraries automatically
+            
+            # Additional configuration for better telemetry
+            enable_logging=True,
+            # Set sampling rate to ensure data is sent
+            sampling_ratio=1.0,
+        )
+        
+        # Get tracer and meter for custom telemetry only
+        tracer = trace.get_tracer(__name__)
+        meter = metrics.get_meter(__name__)
+        
+        # Create custom metrics for business logic
+        issue_counter = meter.create_counter(
+            name="github_issues_processed",
+            description="Number of GitHub issues processed",
+            unit="1"
+        )
+        
+        repo_counter = meter.create_counter(
+            name="repository_sections_rendered",
+            description="Number of repository sections rendered",
+            unit="1"
+        )
+        
+        print("✅ Azure Monitor OpenTelemetry configured with auto-instrumentation")
+        logger.info("Azure Monitor OpenTelemetry successfully configured")
+        
+        # Test telemetry immediately
+        with tracer.start_as_current_span("app_startup_test") as span:
+            span.set_attribute("environment", "azure")
+            span.set_attribute("app_version", "1.0")
+            span.set_attribute("startup_timestamp", datetime.now().isoformat())
+            print("🧪 Test telemetry span created during startup")
+            logger.info("Startup telemetry test span created")
+        
+        # Test custom metric
+        issue_counter.add(1, {"source": "startup_test"})
+        print("🧪 Test metric sent during startup")
+        logger.info("Startup telemetry test metric sent")
+        
+    except Exception as e:
+        print(f"❌ Error configuring Azure Monitor OpenTelemetry: {e}")
+        print(f"📋 Exception details: {type(e).__name__}: {str(e)}")
+        logger.error(f"Failed to configure Azure Monitor OpenTelemetry: {e}", exc_info=True)
+        tracer = None
+        meter = None
+        issue_counter = None
+        repo_counter = None
 else:
     print("⚠️ APPLICATIONINSIGHTS_CONNECTION_STRING not found, OpenTelemetry disabled")
+    logger.warning("APPLICATIONINSIGHTS_CONNECTION_STRING environment variable not found")
     tracer = None
     meter = None
     issue_counter = None
@@ -404,6 +442,46 @@ def load_html_template():
 </html>
 """
 
+def get_last_sync_time():
+    """Get the most recent sync time from the database"""
+    try:
+        # Try different database paths for local and Azure environments
+        db_paths = [
+            'github_issues.db',  # Local relative path
+            '/home/site/wwwroot/github_issues.db',  # Azure Linux App Service path
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')  # Absolute path relative to script
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    break
+            except Exception:
+                continue
+        
+        if not conn:
+            return "No database found"
+        
+        cursor = conn.cursor()
+        cursor.execute('SELECT MAX(last_fetched) FROM issues')
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result and result[0]:
+            # Parse the ISO timestamp and format it nicely
+            last_sync = datetime.fromisoformat(result[0].replace('Z', '+00:00'))
+            # Convert to local time for display
+            local_time = last_sync.replace(tzinfo=timezone.utc).astimezone()
+            return f"Last synced: {local_time.strftime('%Y-%m-%d %H:%M:%S')}"
+        else:
+            return "No sync data available"
+            
+    except Exception as e:
+        print(f"Error getting last sync time: {e}")
+        return "Sync status unknown"
+
 def get_issues_from_db():
     """Get all issues from database"""
     # Create a custom span for database operations
@@ -624,6 +702,25 @@ def format_pr_references(pr_references):
     
     return ', '.join(formatted_refs)
 
+def format_priority_text(priority):
+    """Format priority value as display text"""
+    priority_map = {
+        -1: "Not Set",
+        0: "0 - Critical",
+        1: "1 - High", 
+        2: "2 - Medium",
+        3: "3 - Low",
+        4: "4 - Minimal"
+    }
+    return priority_map.get(priority, "Unknown")
+
+def format_triage_text(triage):
+    """Format triage value as simple icon"""
+    if triage:
+        return '<i class="fas fa-check text-success" title="Triaged"></i>'
+    else:
+        return '<span class="text-muted" title="Not triaged">—</span>'
+
 def generate_repo_section(repo, issues, is_first=False):
     """Generate HTML section for a repository"""
     # Determine language group
@@ -652,7 +749,16 @@ def generate_repo_section(repo, issues, is_first=False):
         try:
             created_date = datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))
             created_days_old = (datetime.now(timezone.utc) - created_date).days
-            created_age_class = "recent" if created_days_old < 30 else "stale"
+            # New age classification: 0-14 days = recent (green), 15-30 days = medium (yellow), 
+            # 31-60 days = old (red), 60+ days = stale (purple)
+            if created_days_old <= 14:
+                created_age_class = "recent"
+            elif created_days_old <= 30:
+                created_age_class = "medium"
+            elif created_days_old <= 60:
+                created_age_class = "old"
+            else:
+                created_age_class = "stale"
         except:
             created_age_class = "unknown"
         
@@ -661,7 +767,15 @@ def generate_repo_section(repo, issues, is_first=False):
             if issue['updated_at']:
                 updated_date = datetime.fromisoformat(issue['updated_at'].replace('Z', '+00:00'))
                 updated_days_old = (datetime.now(timezone.utc) - updated_date).days
-                updated_age_class = "recent" if updated_days_old < 30 else "stale"
+                # Same age classification for updated dates
+                if updated_days_old <= 14:
+                    updated_age_class = "recent"
+                elif updated_days_old <= 30:
+                    updated_age_class = "medium"
+                elif updated_days_old <= 60:
+                    updated_age_class = "old"
+                else:
+                    updated_age_class = "stale"
                 updated_display = issue['updated_at'][:10]
             else:
                 updated_age_class = "unknown"
@@ -686,29 +800,32 @@ def generate_repo_section(repo, issues, is_first=False):
         priority = issue.get('priority', -1)
         
         issue_rows += f"""
-        <tr data-repo="{repo}" data-number="{issue['number']}">
-            <td><a href="{issue['html_url']}" target="_blank">#{issue['number']}</a></td>
-            <td><a href="{issue['html_url']}" target="_blank">{issue['title']}</a></td>
+        <tr data-repo="{html.escape(repo)}" data-number="{issue['number']}" 
+            data-title="{html.escape(issue['title'].lower())}" 
+            data-assignee="{html.escape(assignee_display.lower() if assignee_display != 'Unassigned' else 'zzz_unassigned')}"
+            data-created="{html.escape(issue['created_at'])}" 
+            data-updated="{html.escape(issue['updated_at'])}"
+            data-triage="{triage}"
+            data-priority="{priority}">
+            <td style="text-align: center;">
+                <button class="btn btn-sm btn-outline-primary edit-btn" 
+                        onclick="openIssueModal('{html.escape(repo)}', {issue['number']}, '{html.escape(issue['title'])}', '{issue['html_url']}', {triage}, {priority})"
+                        title="Edit issue details">
+                    <i class="fas fa-edit"></i>
+                </button>
+            </td>
+            <td>
+                <a href="{issue['html_url']}" target="_blank" class="issue-title-link">#{issue['number']} - {html.escape(issue['title'])}</a>
+            </td>
             <td>{assignee_display}</td>
             <td>{pr_display}</td>
             <td class="{created_age_class}">{issue['created_at'][:10]}</td>
             <td class="{updated_age_class}">{updated_display}</td>
-            <td>
-                <input type="checkbox" class="triage-checkbox" {'checked' if triage else ''} 
-                       onchange="markDirty(this)">
+            <td class="triage-display">
+                {format_triage_text(triage)}
             </td>
-            <td>
-                <select class="priority-select" onchange="markDirty(this)">
-                    <option value="-1" {'selected' if priority == -1 else ''}>Not Set</option>
-                    <option value="0" {'selected' if priority == 0 else ''}>0 - Critical</option>
-                    <option value="1" {'selected' if priority == 1 else ''}>1 - High</option>
-                    <option value="2" {'selected' if priority == 2 else ''}>2 - Medium</option>
-                    <option value="3" {'selected' if priority == 3 else ''}>3 - Low</option>
-                    <option value="4" {'selected' if priority == 4 else ''}>4 - Minimal</option>
-                </select>
-            </td>
-            <td class="actions-cell">
-                <button class="save-btn" onclick="saveIssueChanges(this)" style="display: none;">Save Changes</button>
+            <td class="priority-display">
+                {format_priority_text(priority)}
             </td>
         </tr>
         """
@@ -722,23 +839,34 @@ def generate_repo_section(repo, issues, is_first=False):
             </h2>
         </div>
         <div class="controls">
-            <input type="text" class="search-box" id="search-{repo_id}" 
-                   placeholder="Search issues..." 
+            <input type="text" class="form-control search-box" id="search-{repo_id}" 
+                   placeholder="🔍 Search issues..." 
                    onkeyup="filterTable('{repo_id}', this.value)">
         </div>
         <div class="table-container">
-            <table class="issues-table" id="table-{repo_id}">
+            <table class="table table-hover table-striped issues-table" id="table-{repo_id}">
                 <thead>
                     <tr>
-                        <th>Issue #</th>
-                        <th>Title</th>
-                        <th>Assignee</th>
+                        <th style="width: 60px;">Edit</th>
+                        <th class="sortable" data-column="title" onclick="sortTable('{repo_id}', 'title')">
+                            Title <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th class="sortable" data-column="assignee" onclick="sortTable('{repo_id}', 'assignee')">
+                            Assignee <i class="fas fa-sort sort-icon"></i>
+                        </th>
                         <th>Related PRs/Issues</th>
-                        <th>Created</th>
-                        <th>Updated</th>
-                        <th>Triage</th>
-                        <th>Priority</th>
-                        <th>Actions</th>
+                        <th class="sortable" data-column="created" onclick="sortTable('{repo_id}', 'created')">
+                            Created <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th class="sortable" data-column="updated" onclick="sortTable('{repo_id}', 'updated')">
+                            Updated <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th class="sortable" data-column="triage" onclick="sortTable('{repo_id}', 'triage')">
+                            Triage <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th class="sortable" data-column="priority" onclick="sortTable('{repo_id}', 'priority')">
+                            Priority <i class="fas fa-sort sort-icon"></i>
+                        </th>
                     </tr>
                 </thead>
                 <tbody>
@@ -746,20 +874,20 @@ def generate_repo_section(repo, issues, is_first=False):
                 </tbody>
             </table>
             <!-- Pagination controls -->
-            <div class="pagination" id="pagination-{repo_id}" style="display: none;">
-                <div class="pagination-info" id="page-info-{repo_id}">
+            <div class="d-flex justify-content-between align-items-center pagination" id="pagination-{repo_id}" style="display: none;">
+                <div class="pagination-info text-muted" id="page-info-{repo_id}">
                     Showing 1-10 of {issue_count} issues
                 </div>
-                <div class="pagination-controls">
-                    <button class="pagination-btn" id="prev-btn-{repo_id}" onclick="prevPage('{repo_id}')" disabled>
-                        ← Previous
+                <div class="pagination-controls d-flex align-items-center">
+                    <button class="btn btn-outline-secondary btn-sm me-2" id="prev-btn-{repo_id}" onclick="prevPage('{repo_id}')" disabled>
+                        <i class="fas fa-chevron-left"></i> Previous
                     </button>
-                    <input type="number" class="page-input" id="page-input-{repo_id}" 
-                           value="1" min="1" max="1" 
+                    <input type="number" class="form-control form-control-sm page-input me-2" id="page-input-{repo_id}" 
+                           value="1" min="1" max="1" style="width: 80px;"
                            onchange="goToPage('{repo_id}', this.value)">
-                    <span id="page-counter-{repo_id}">Page 1 of 1</span>
-                    <button class="pagination-btn" id="next-btn-{repo_id}" onclick="nextPage('{repo_id}')" disabled>
-                        Next →
+                    <span class="text-muted me-2" id="page-counter-{repo_id}">Page 1 of 1</span>
+                    <button class="btn btn-outline-secondary btn-sm" id="next-btn-{repo_id}" onclick="nextPage('{repo_id}')" disabled>
+                        Next <i class="fas fa-chevron-right"></i>
                     </button>
                 </div>
             </div>
@@ -780,6 +908,7 @@ def dashboard():
 def _dashboard_internal(span=None):
     """Internal dashboard function with telemetry"""
     print("🌐 Serving GitHub Issues Dashboard...")
+    logger.info("Dashboard request received")
     
     # Get the selected repo from query parameter
     selected_repo = request.args.get('repo', '')
@@ -788,6 +917,10 @@ def _dashboard_internal(span=None):
     if span:
         span.set_attribute("dashboard.selected_repo", selected_repo)
         span.set_attribute("request.method", "GET")
+        span.set_attribute("request.user_agent", request.headers.get('User-Agent', 'unknown'))
+        logger.info(f"Dashboard telemetry span active with selected_repo: {selected_repo}")
+    else:
+        logger.warning("Dashboard telemetry span is None - telemetry may not be configured")
     
     # Get issues from database
     issues = get_issues_from_db()
@@ -826,13 +959,12 @@ def _dashboard_internal(span=None):
         
         repo_sections += generate_repo_section(repo, repo_issues, is_first)
         
-        # Generate navigation link
+        # Generate navigation link for Bootstrap dropdown
         repo_name = repo.split('/')[-1]
         issue_count = len(repo_issues)
-        nav_link_class = "nav-link"
-        nav_link = f'''<a href="#" class="{nav_link_class}" onclick="setActiveRepo('{repo_id}')">
+        nav_link = f'''<a class="dropdown-item" href="#" onclick="setActiveRepo('{repo_id}')">
             {repo_name}
-            <span class="issue-count-badge">{issue_count}</span>
+            <span class="badge badge-light ml-auto">{issue_count}</span>
         </a>'''
         
         # Categorize by language
@@ -866,13 +998,14 @@ def _dashboard_internal(span=None):
     html = html.replace('{total_issues}', str(total_issues))
     html = html.replace('{recent_issues}', str(recent_issues))
     html = html.replace('{stale_issues}', str(stale_issues))
-    html = html.replace('{database_info}', f'<div style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">📅 Last updated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</div>')
+    html = html.replace('{database_info_text}', get_last_sync_time())
     html = html.replace('{selected_repo}', selected_repo)
     html = html.replace('{group_counts_script}', f'''
     <script>
-        document.getElementById('nodejs-count').textContent = '{nodejs_count}';
-        document.getElementById('python-count').textContent = '{python_count}';
-        document.getElementById('browser-count').textContent = '{browser_count}';
+        // Update navbar badge counts
+        document.getElementById('navbar-nodejs-count').textContent = '{nodejs_count}';
+        document.getElementById('navbar-python-count').textContent = '{python_count}';
+        document.getElementById('navbar-browser-count').textContent = '{browser_count}';
     </script>
     ''')
     
@@ -1124,6 +1257,50 @@ def health():
             return jsonify(response_data)
     else:
         return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat(), 'telemetry_enabled': False})
+
+@app.route('/api/telemetry_test')
+def telemetry_test():
+    """Test endpoint to verify Azure Monitor telemetry is working"""
+    if not tracer or not meter:
+        return jsonify({
+            'status': 'disabled',
+            'message': 'Azure Monitor OpenTelemetry is not configured',
+            'telemetry_enabled': False
+        })
+    
+    try:
+        # Test custom span with attributes
+        with tracer.start_as_current_span("telemetry_test") as span:
+            span.set_attribute("test.type", "manual")
+            span.set_attribute("test.timestamp", datetime.now().isoformat())
+            span.set_attribute("test.endpoint", "/api/telemetry_test")
+            
+            # Test custom metrics
+            if issue_counter:
+                issue_counter.add(1, {"source": "telemetry_test", "test": "true"})
+            if repo_counter:
+                repo_counter.add(1, {"type": "telemetry_test", "test": "true"})
+            
+            # Add some logging for Azure Monitor
+            print("🧪 Telemetry test executed - span and metrics sent")
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Telemetry test completed successfully',
+                'telemetry_enabled': True,
+                'timestamp': datetime.now().isoformat(),
+                'connection_string_present': bool(os.environ.get('APPLICATIONINSIGHTS_CONNECTION_STRING')),
+                'span_created': True,
+                'metrics_sent': True
+            })
+    except Exception as e:
+        print(f"❌ Telemetry test failed: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Telemetry test failed: {str(e)}',
+            'telemetry_enabled': True,
+            'error_type': type(e).__name__
+        }), 500
 
 if __name__ == '__main__':
     print("🚀 Starting Fixed GitHub Issues Dashboard Server...")
