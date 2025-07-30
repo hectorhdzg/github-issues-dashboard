@@ -80,8 +80,16 @@ Thumbs.db
 .env.test.local
 .env.production.local
 
+# Flask session files
+flask_session/
+
 # Azure deployment files
 .azure/
+
+# Certificate files (never commit these!)
+*.pfx
+*.cer
+*.p12
 
 # Logs
 *.log

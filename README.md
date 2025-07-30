@@ -5,6 +5,7 @@ A comprehensive web dashboard for monitoring and managing GitHub issues across m
 ## 🚀 Features
 
 - **Multi-Repository Support**: Monitor issues across 14+ repositories simultaneously
+- **Azure AD Authentication**: Optional enterprise authentication with single sign-on
 - **Smart PR/Issue Detection**: Automatically extracts and links related PRs and issues from issue descriptions
 - **24-Hour Auto Sync**: Keeps data fresh with automated GitHub API synchronization
 - **Triage Management**: Track and manage issue triage status with checkboxes
@@ -12,6 +13,7 @@ A comprehensive web dashboard for monitoring and managing GitHub issues across m
 - **Advanced Filtering**: Search and filter issues by title, assignee, or status
 - **Responsive Design**: Clean, modern interface that works on desktop and mobile
 - **Real-time Status**: Monitor sync status and view last update times
+- **Azure Monitor Integration**: Built-in telemetry and monitoring support
 
 ## 📊 Supported Repositories
 

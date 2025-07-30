@@ -21,7 +21,7 @@ param flaskDebug string = 'false'
 @secure()
 param githubToken string = ''
 
-// Generate a unique token for resource naming
+// Generate a unique token for resource naming (required format)
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location, environmentName)
 var resourcePrefix = 'ghd' // GitHub Dashboard prefix (≤ 3 characters)
 
@@ -32,7 +32,7 @@ var applicationInsightsName = 'az-${resourcePrefix}-ai-${resourceToken}'
 var logAnalyticsWorkspaceName = 'az-${resourcePrefix}-logs-${resourceToken}'
 var managedIdentityName = 'az-${resourcePrefix}-id-${resourceToken}'
 
-// Create User-Assigned Managed Identity
+// Create User-Assigned Managed Identity (required by AZD platform, not used for auth)
 resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: managedIdentityName
   location: location
@@ -188,6 +188,15 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
           name: 'GITHUB_TOKEN'
           value: githubToken
         }
+        // Authentication is disabled - open access
+        {
+          name: 'ENABLE_USER_AUTHENTICATION'
+          value: 'false'
+        }
+        {
+          name: 'FLASK_SECRET_KEY'
+          value: base64(uniqueString(subscription().id, resourceGroup().id, 'flask-secret'))
+        }
       ]
     }
   }
@@ -234,7 +243,6 @@ output REACT_APP_API_BASE_URL string = 'https://${appService.properties.defaultH
 output REACT_APP_WEB_BASE_URL string = 'https://${appService.properties.defaultHostName}'
 output AZURE_RESOURCE_GROUP string = resourceGroup().name
 output SERVICE_DASHBOARD_APP_ENDPOINT_URL string = 'https://${appService.properties.defaultHostName}'
-output SERVICE_DASHBOARD_APP_IDENTITY_PRINCIPAL_ID string = managedIdentity.properties.principalId
 output SERVICE_DASHBOARD_APP_NAME string = appService.name
 output SERVICE_DASHBOARD_APP_RESOURCE_EXISTS bool = true
 
@@ -243,5 +251,3 @@ output RESOURCE_GROUP_ID string = resourceGroup().id
 output AZURE_APP_SERVICE_NAME string = appService.name
 output AZURE_APP_SERVICE_URL string = 'https://${appService.properties.defaultHostName}'
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = applicationInsights.properties.ConnectionString
-output MANAGED_IDENTITY_CLIENT_ID string = managedIdentity.properties.clientId
-output MANAGED_IDENTITY_PRINCIPAL_ID string = managedIdentity.properties.principalId
