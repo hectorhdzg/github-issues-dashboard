@@ -488,6 +488,33 @@
             text-decoration: underline !important;
         }
         
+        /* Label styling */
+        .badge {
+            font-size: 0.75rem;
+            font-weight: 500;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem;
+            display: inline-block;
+            margin-right: 0.25rem;
+            margin-bottom: 0.25rem;
+        }
+        
+        /* Mention link styling */
+        .mention-link {
+            color: #0969da;
+            text-decoration: none;
+            font-weight: 500;
+            padding: 0.125rem 0.25rem;
+            border-radius: 0.25rem;
+            transition: background-color 0.2s ease;
+        }
+        
+        .mention-link:hover {
+            color: #0969da;
+            background-color: #f6f8fa;
+            text-decoration: none;
+        }
+        
         /* Modal styling */
         .modal-header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -537,6 +564,34 @@
             font-family: 'Courier New', monospace;
             font-weight: bold;
             color: #667eea;
+        }
+        
+        /* Modal context information styling */
+        .modal-context-info {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .modal-context-info .badge {
+            margin-right: 0.25rem;
+            margin-bottom: 0.25rem;
+        }
+        
+        .modal-context-info .badge-secondary {
+            background-color: #6c757d;
+        }
+        
+        .modal-context-info .badge-info {
+            background-color: #17a2b8;
+        }
+        
+        .modal-context-info a.badge:hover {
+            text-decoration: none;
+            opacity: 0.8;
+            transform: translateY(-1px);
+            transition: all 0.2s ease;
         }
         
         .assignee {
@@ -603,6 +658,109 @@
             padding: 3rem;
             color: #666;
             font-style: italic;
+        }
+        
+        /* Closed issues styling */
+        .closed-issues .table-header {
+            background-color: #4a4a4a !important;
+            color: #e0e0e0 !important;
+        }
+        
+        .closed-issues .issues-table th {
+            background-color: #4a4a4a !important;
+            color: #e0e0e0 !important;
+            border-color: #5a5a5a !important;
+        }
+        
+        .closed-issues .issues-table th.sortable:hover {
+            background-color: #5a5a5a !important;
+            color: #f0f0f0 !important;
+        }
+        
+        /* Toggle Switch Styling - Simplified for visibility */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+        }
+        
+        .toggle-input {
+            display: none;
+        }
+        
+        .toggle-label {
+            display: block;
+            background: #28a745;
+            border-radius: 18px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            width: 80px;
+            height: 36px;
+            margin: 0;
+            overflow: hidden;
+        }
+        
+        /* Text container that shows current state */
+        .toggle-text {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: white;
+            z-index: 2;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+        }
+        
+        /* Hide closed text by default */
+        .toggle-closed {
+            display: none;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 32px;
+            height: 32px;
+            background: white;
+            border-radius: 50%;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            z-index: 1;
+        }
+        
+        /* Checked state - red background for closed issues */
+        .toggle-input:checked + .toggle-label {
+            background: #dc3545;
+        }
+        
+        .toggle-input:checked + .toggle-label .toggle-open {
+            display: none;
+        }
+        
+        .toggle-input:checked + .toggle-label .toggle-closed {
+            display: flex;
+        }
+        
+        .toggle-input:checked + .toggle-label .toggle-slider {
+            transform: translateX(44px);
+        }
+        
+        /* Hover effects */
+        .toggle-label:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            transform: translateY(-1px);
+        }
+        
+        .toggle-label:active {
+            transform: translateY(0);
         }
         
         .pagination {
@@ -1142,10 +1300,17 @@
                 }
                 activeRepoId = repoId;
                 
-                // Update URL with selected repo parameter
+                // Update URL with selected repo parameter but preserve current state
                 const repoName = repoSection.getAttribute('data-repo-name') || repoId.replace(/-/g, '/');
                 const newUrl = new URL(window.location);
                 newUrl.searchParams.set('repo', repoName);
+                
+                // Only set state to 'open' if no state is currently specified
+                const currentState = newUrl.searchParams.get('state');
+                if (!currentState) {
+                    newUrl.searchParams.set('state', 'open'); // Default to open issues only when no state specified
+                }
+                
                 window.history.replaceState({}, '', newUrl);
                 
                 // Close the dropdown menu after selection
@@ -1280,8 +1445,44 @@
         // Modal-related variables
         let currentModalIssue = null;
         
+        // Function to open issue modal from data attribute (safer approach)
+        function openIssueModalFromData(button) {
+            try {
+                const modalDataJson = button.getAttribute('data-modal-data');
+                console.log('Raw modal data:', modalDataJson);
+                
+                // Create a temporary element to decode HTML entities
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = modalDataJson;
+                const unescapedJson = tempDiv.textContent || tempDiv.innerText || '';
+                console.log('Unescaped modal data:', unescapedJson);
+                
+                const modalData = JSON.parse(unescapedJson);
+                console.log('Parsed modal data:', modalData);
+                
+                openIssueModal(
+                    modalData.repo,
+                    modalData.number, 
+                    modalData.title,
+                    modalData.htmlUrl,
+                    modalData.triage,
+                    modalData.priority,
+                    modalData.comments,
+                    modalData.assignees,
+                    modalData.labels,
+                    modalData.mentions
+                );
+            } catch (error) {
+                console.error('Error parsing modal data:', error);
+                console.error('Modal data JSON:', button.getAttribute('data-modal-data'));
+                alert('Error opening issue details. Please refresh the page and try again.');
+            }
+        }
+        
         // Function to open issue modal
-        function openIssueModal(repo, number, title, htmlUrl, triage, priority) {
+        function openIssueModal(repo, number, title, htmlUrl, triage, priority, comments = '', assignees = [], labels = [], mentions = []) {
+            console.log('Opening modal with data:', { repo, number, title, assignees, labels, mentions });
+            
             // Store current issue data
             currentModalIssue = {
                 repo: repo,
@@ -1289,7 +1490,11 @@
                 title: title,
                 htmlUrl: htmlUrl,
                 triage: triage,
-                priority: priority
+                priority: priority,
+                comments: comments,
+                assignees: assignees,
+                labels: labels,
+                mentions: mentions
             };
             
             // Populate modal fields
@@ -1298,6 +1503,15 @@
             document.getElementById('modal-issue-title').textContent = title;
             document.getElementById('modal-triage').checked = triage == 1;
             document.getElementById('modal-priority').value = priority;
+            document.getElementById('modal-comments').value = comments || '';
+            
+            // Populate context information
+            console.log('Populating assignees:', assignees);
+            populateAssignees(assignees);
+            console.log('Populating labels:', labels);
+            populateLabels(labels);
+            console.log('Populating mentions:', mentions);
+            populateMentions(mentions);
             
             // Reset save button state
             const saveBtn = document.getElementById('modal-save-btn');
@@ -1309,6 +1523,90 @@
             $('#issueModal').modal('show');
         }
         
+        // Helper function to populate assignees display
+        function populateAssignees(assignees) {
+            console.log('populateAssignees called with:', assignees);
+            console.log('Assignees type:', typeof assignees);
+            console.log('Assignees is array:', Array.isArray(assignees));
+            
+            const container = document.getElementById('modal-assignees');
+            console.log('Assignees container found:', container);
+            
+            // Ensure assignees is always an array
+            if (!assignees) {
+                console.log('No assignees provided, setting to unassigned');
+                container.innerHTML = '<span class="text-muted">Unassigned</span>';
+                return;
+            }
+            
+            // Convert single assignee object to array if needed
+            let assigneesArray = Array.isArray(assignees) ? assignees : [assignees];
+            console.log('Processed assignees array:', assigneesArray);
+            
+            if (assigneesArray.length === 0) {
+                console.log('Empty assignees array, setting to unassigned');
+                container.innerHTML = '<span class="text-muted">Unassigned</span>';
+                return;
+            }
+            
+            console.log('Processing', assigneesArray.length, 'assignees');
+            const assigneeLinks = assigneesArray.map(assignee => {
+                console.log('Processing assignee:', assignee);
+                if (!assignee || !assignee.login) {
+                    console.error('Invalid assignee object:', assignee);
+                    return '';
+                }
+                return `<a href="https://github.com/${assignee.login}" target="_blank" class="badge badge-primary mr-1" style="font-size: 0.75rem; text-decoration: none;">
+                    <i class="fas fa-user"></i> @${assignee.login}
+                 </a>`;
+            }).filter(link => link !== '').join('');
+            
+            console.log('Setting assignee HTML:', assigneeLinks);
+            container.innerHTML = assigneeLinks;
+        }
+        
+        // Helper function to populate labels display
+        function populateLabels(labels) {
+            const container = document.getElementById('modal-labels');
+            if (!labels || labels.length === 0) {
+                container.innerHTML = '<span class="text-muted">None</span>';
+                return;
+            }
+            
+            const labelBadges = labels.map(label => {
+                const color = label.color || 'cccccc';
+                // Calculate text color based on background brightness
+                const r = parseInt(color.substr(0, 2), 16);
+                const g = parseInt(color.substr(2, 2), 16);
+                const b = parseInt(color.substr(4, 2), 16);
+                const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+                const textColor = brightness > 128 ? '#000000' : '#ffffff';
+                
+                return `<span class="badge mr-1" style="background-color: #${color}; color: ${textColor}; font-size: 0.75rem;" title="${label.description || ''}">
+                    ${label.name}
+                </span>`;
+            }).join('');
+            
+            container.innerHTML = labelBadges;
+        }
+        
+        // Helper function to populate mentions display
+        function populateMentions(mentions) {
+            const container = document.getElementById('modal-mentions');
+            if (!mentions || mentions.length === 0) {
+                container.innerHTML = '<span class="text-muted">None</span>';
+                return;
+            }
+            
+            const mentionLinks = mentions.map(mention => 
+                `<a href="https://github.com/${mention}" target="_blank" class="badge badge-info mr-1">
+                    <i class="fas fa-at"></i> ${mention}
+                 </a>`
+            ).join('');
+            
+            container.innerHTML = mentionLinks;
+        }
+        
         // Function to save modal changes
         function saveModalChanges() {
             if (!currentModalIssue) return;
@@ -1316,6 +1614,7 @@
             const saveBtn = document.getElementById('modal-save-btn');
             const triage = document.getElementById('modal-triage').checked;
             const priority = parseInt(document.getElementById('modal-priority').value);
+            const comments = document.getElementById('modal-comments').value;
             
             // Update button state to show saving
             saveBtn.disabled = true;
@@ -1333,7 +1632,8 @@
                     repo: currentModalIssue.repo,
                     number: currentModalIssue.number,
                     triage: triage,
-                    priority: priority
+                    priority: priority,
+                    comments: comments
                 })
             })
             .then(response => response.json())
@@ -1346,6 +1646,14 @@
                     
                     // Update the original table row
                     updateTableRow(currentModalIssue.repo, currentModalIssue.number, triage, priority);
+                    
+                    // Update the current modal issue object with new values
+                    currentModalIssue.triage = triage;
+                    currentModalIssue.priority = priority;
+                    currentModalIssue.comments = comments;
+                    
+                    // Update the modal data attribute in the button for future opens
+                    updateModalDataAttribute(currentModalIssue.repo, currentModalIssue.number, currentModalIssue);
                     
                     // Close modal after 1 second
                     setTimeout(() => {
@@ -1416,6 +1724,28 @@
                 row.dataset.priority = priority.toString();
             }
         }
+        
+        // Function to update the modal data attribute after save
+        function updateModalDataAttribute(repo, number, updatedModalData) {
+            // Find the edit button for this issue
+            const row = document.querySelector(`tr[data-repo="${repo}"][data-number="${number}"]`);
+            if (row) {
+                const editButton = row.querySelector('.edit-btn[data-modal-data]');
+                if (editButton) {
+                    // Update the modal data attribute with the new values
+                    const newModalDataJson = JSON.stringify(updatedModalData);
+                    const escapedModalData = newModalDataJson
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#x27;');
+                    
+                    editButton.setAttribute('data-modal-data', escapedModalData);
+                    console.log('Updated modal data attribute for issue #' + number);
+                }
+            }
+        }
     </script>
     <style>
         .pagination-hidden {
@@ -1439,14 +1769,16 @@
             border-spacing: 0;
         }
         
-        .issues-table th:nth-child(1) { width: 6%; }  /* Edit */
-        .issues-table th:nth-child(2) { width: 44%; } /* Title (with issue number) */
-        .issues-table th:nth-child(3) { width: 13%; } /* Assignee */
-        .issues-table th:nth-child(4) { width: 13%; } /* Related PRs */
-        .issues-table th:nth-child(5) { width: 10%; } /* Created */
-        .issues-table th:nth-child(6) { width: 10%; } /* Updated */
-        .issues-table th:nth-child(7) { width: 4%; text-align: center; }  /* Triage */
-        .issues-table th:nth-child(8) { width: 10%; } /* Priority */
+        .issues-table th:nth-child(1) { width: 5%; }  /* Edit */
+        .issues-table th:nth-child(2) { width: 35%; } /* Title (with issue number) */
+        .issues-table th:nth-child(3) { width: 10%; } /* Assignee */
+        .issues-table th:nth-child(4) { width: 10%; } /* Related PRs */
+        .issues-table th:nth-child(5) { width: 12%; } /* Labels */
+        .issues-table th:nth-child(6) { width: 10%; } /* Mentions */
+        .issues-table th:nth-child(7) { width: 8%; }  /* Created */
+        .issues-table th:nth-child(8) { width: 8%; }  /* Updated */
+        .issues-table th:nth-child(9) { width: 4%; text-align: center; }  /* Triage */
+        .issues-table th:nth-child(10) { width: 8%; } /* Priority */
         
         /* Triage column styling */
         .triage-display {
@@ -1641,6 +1973,38 @@
                             <h6 id="modal-issue-title" class="mt-1"></h6>
                         </div>
                         
+                        <!-- Issue Context Information -->
+                        <div class="mb-4 modal-context-info">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-users"></i> Assignees
+                                    </label>
+                                    <div id="modal-assignees" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-tags"></i> Labels
+                                    </label>
+                                    <div id="modal-labels" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-at"></i> Mentions
+                                    </label>
+                                    <div id="modal-mentions" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <hr class="mb-4">
+                        
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="form-group">
@@ -1670,6 +2034,17 @@
                             </div>
                         </div>
                         
+                        <div class="form-group mt-3">
+                            <label for="modal-comments" class="font-weight-bold">
+                                <i class="fas fa-comment"></i> Comments
+                            </label>
+                            <textarea class="form-control" id="modal-comments" rows="4" 
+                                      placeholder="Add your comments or notes about this issue..."></textarea>
+                            <small class="form-text text-muted">
+                                Personal notes and comments (not visible in the main table)
+                            </small>
+                        </div>
+                        
                         <div class="mt-3">
                             <small class="text-muted">
                                 <i class="fas fa-info-circle"></i> 
@@ -1689,6 +2064,35 @@
             </div>
         </div>
     </div>
+    
+    <!-- State Toggle Functions -->
+    <script>
+        function toggleIssueState() {
+            // Get current state from URL or default to 'open'
+            const currentParams = new URLSearchParams(window.location.search);
+            const currentState = currentParams.get('state') || 'open';
+            
+            // Toggle to opposite state
+            const newState = currentState === 'open' ? 'closed' : 'open';
+            
+            // Update URL parameter
+            currentParams.set('state', newState);
+            
+            // Navigate to new URL
+            window.location.href = window.location.pathname + '?' + currentParams.toString();
+        }
+        
+        // Add some debug info on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Page loaded');
+            const toggles = document.querySelectorAll('.toggle-switch');
+            console.log(`Found ${toggles.length} toggle switches`);
+            
+            toggles.forEach((toggle, index) => {
+                console.log(`Toggle ${index}:`, toggle);
+            });
+        });
+    </script>
     
     <!-- Bootstrap JavaScript -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>

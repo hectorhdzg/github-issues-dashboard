@@ -11,6 +11,7 @@ import time
 import requests
 import schedule
 import html
+import re
 from flask import Flask, render_template_string, jsonify, request, session, redirect, url_for
 import sqlite3
 import json
@@ -263,6 +264,166 @@ def get_github_headers():
         headers['Authorization'] = f'token {GITHUB_TOKEN}'
     return headers
 
+def extract_labels_with_colors(issue_data):
+    """Extract labels with their names and colors from GitHub issue data"""
+    labels = []
+    if 'labels' in issue_data and issue_data['labels']:
+        for label in issue_data['labels']:
+            labels.append({
+                'name': label.get('name', ''),
+                'color': label.get('color', 'cccccc'),  # Default to gray if no color
+                'description': label.get('description', '')
+            })
+    return json.dumps(labels)
+
+def extract_assignees_with_info(issue_data):
+    """Extract assignees with their login names from GitHub issue data"""
+    assignees = []
+    if 'assignees' in issue_data and issue_data['assignees']:
+        for assignee in issue_data['assignees']:
+            if assignee and 'login' in assignee:
+                assignees.append({
+                    'login': assignee['login'],
+                    'avatar_url': assignee.get('avatar_url', ''),
+                    'html_url': assignee.get('html_url', f"https://github.com/{assignee['login']}")
+                })
+    return json.dumps(assignees)
+
+def extract_mentioned_handles(issue_body, pr_references_text=''):
+    """Extract GitHub handles mentioned in issue body and PR references"""
+    handles = set()
+    
+    # Pattern to match GitHub handles (@username)
+    # Matches @username but not email addresses
+    github_handle_pattern = r'(?:^|\s)@([a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38})(?=\s|$|[^\w-])'
+    
+    # Extract from issue body
+    if issue_body:
+        matches = re.findall(github_handle_pattern, issue_body, re.MULTILINE)
+        handles.update(matches)
+    
+    # Extract from PR references text (if provided)
+    if pr_references_text:
+        matches = re.findall(github_handle_pattern, pr_references_text, re.MULTILINE)
+        handles.update(matches)
+    
+    # Remove common false positives and system accounts
+    filtered_handles = []
+    exclude_handles = {
+        'dependabot', 'github-actions', 'codecov', 'coveralls', 
+        'renovate', 'greenkeeper', 'mergify', 'travis', 'appveyor'
+    }
+    
+    for handle in handles:
+        if handle.lower() not in exclude_handles and len(handle) > 1:
+            filtered_handles.append(handle)
+    
+    return json.dumps(sorted(list(set(filtered_handles))))
+
+def fetch_pr_content_for_mentions(repo, pr_number, headers):
+    """Fetch PR content to extract mentions (with rate limiting consideration)"""
+    try:
+        pr_url = f"{GITHUB_API_BASE}/repos/{repo}/pulls/{pr_number}"
+        response = requests.get(pr_url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            pr_data = response.json()
+            return pr_data.get('body', '')
+        elif response.status_code == 404:
+            # PR might not exist, could be an issue reference
+            issue_url = f"{GITHUB_API_BASE}/repos/{repo}/issues/{pr_number}"
+            response = requests.get(issue_url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                issue_data = response.json()
+                return issue_data.get('body', '')
+    except Exception as e:
+        print(f"  ⚠️ Could not fetch PR/issue #{pr_number}: {e}")
+    
+    return ''
+
+def update_database_schema():
+    """Update database schema to add new columns if they don't exist"""
+    try:
+        # Try different database paths for local and Azure environments
+        db_paths = [
+            'github_issues.db',  # Local relative path
+            '/home/site/wwwroot/github_issues.db',  # Azure Linux App Service path
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')  # Absolute path relative to script
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    break
+            except Exception:
+                continue
+        
+        if not conn:
+            print("❌ Could not connect to database for schema update")
+            return False
+        
+        cursor = conn.cursor()
+        
+        # Check if new columns exist
+        cursor.execute("PRAGMA table_info(issues)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        # Add labels column if it doesn't exist
+        if 'labels' not in columns:
+            print("📋 Adding 'labels' column to issues table...")
+            cursor.execute("ALTER TABLE issues ADD COLUMN labels TEXT DEFAULT '[]'")
+            print("✅ Added 'labels' column")
+        
+        # Add mentioned_handles column if it doesn't exist
+        if 'mentioned_handles' not in columns:
+            print("📋 Adding 'mentioned_handles' column to issues table...")
+            cursor.execute("ALTER TABLE issues ADD COLUMN mentioned_handles TEXT DEFAULT '[]'")
+            print("✅ Added 'mentioned_handles' column")
+        
+        # Add assignees column if it doesn't exist (JSON array for multiple assignees)
+        if 'assignees' not in columns:
+            print("📋 Adding 'assignees' column to issues table...")
+            cursor.execute("ALTER TABLE issues ADD COLUMN assignees TEXT DEFAULT '[]'")
+            print("✅ Added 'assignees' column")
+        
+        # Add comments column if it doesn't exist (for user notes/comments)
+        if 'comments' not in columns:
+            print("📋 Adding 'comments' column to issues table...")
+            cursor.execute("ALTER TABLE issues ADD COLUMN comments TEXT DEFAULT ''")
+            print("✅ Added 'comments' column")
+        
+        # Add triage column if it doesn't exist (for triaging status)
+        if 'triage' not in columns:
+            print("📋 Adding 'triage' column to issues table...")
+            cursor.execute("ALTER TABLE issues ADD COLUMN triage INTEGER DEFAULT 0")
+            print("✅ Added 'triage' column")
+        
+        # Add priority column if it doesn't exist (for priority ranking)
+        if 'priority' not in columns:
+            print("📋 Adding 'priority' column to issues table...")
+            cursor.execute("ALTER TABLE issues ADD COLUMN priority INTEGER DEFAULT -1")
+            print("✅ Added 'priority' column")
+        else:
+            # Fix existing priority values that have incorrect default (2 -> -1)
+            # Only update rows where priority is exactly 2 (the old incorrect default)
+            cursor.execute("SELECT COUNT(*) FROM issues WHERE priority = 2")
+            count_before = cursor.fetchone()[0]
+            
+            if count_before > 0:
+                cursor.execute("UPDATE issues SET priority = -1 WHERE priority = 2")
+                updated_rows = cursor.rowcount
+                print(f"🔧 Fixed {updated_rows} issues with incorrect default priority (2 -> -1)")
+        
+        conn.commit()
+        conn.close()
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error updating database schema: {e}")
+        return False
+
 def fetch_github_issues(repo, per_page=100):
     """Fetch issues from a GitHub repository"""
     print(f"🔄 Fetching issues from {repo}...")
@@ -271,85 +432,160 @@ def fetch_github_issues(repo, per_page=100):
     if not GITHUB_TOKEN:
         print(f"📡 Using unauthenticated GitHub API for {repo} (60 requests/hour limit)")
     else:
-        print(f"� Using authenticated GitHub API for {repo} (5000 requests/hour limit)")
+        print(f"🔑 Using authenticated GitHub API for {repo} (5000 requests/hour limit)")
+    
+    # Define Azure monitoring labels for filtering
+    azure_monitor_labels = [
+        "Monitor - Distro",
+        "Monitor - Exporter", 
+        "Monitor - ApplicationInsights"
+    ]
     
     all_issues = []
-    page = 1
+    seen_issue_numbers = set()  # Track duplicates when fetching by label
     
-    while True:
-        try:
-            # Get both open and closed issues
-            url = f"{GITHUB_API_BASE}/repos/{repo}/issues"
-            params = {
-                'state': 'all',  # Include both open and closed
-                'per_page': per_page,
-                'page': page,
-                'sort': 'updated',
-                'direction': 'desc'
-            }
+    # For Azure repos, fetch issues by each monitoring label separately
+    if repo.startswith('Azure/'):
+        print(f"  🏷️ Filtering Azure repo '{repo}' for monitoring labels: {', '.join(azure_monitor_labels)}")
+        
+        for label in azure_monitor_labels:
+            page = 1
+            while True:
+                try:
+                    url = f"{GITHUB_API_BASE}/repos/{repo}/issues"
+                    params = {
+                        'state': 'all',
+                        'per_page': per_page,
+                        'page': page,
+                        'sort': 'updated',
+                        'direction': 'desc',
+                        'labels': label  # Fetch issues with this specific label
+                    }
+                    
+                    response = requests.get(url, headers=get_github_headers(), params=params)
+                    
+                    # Check rate limit headers
+                    rate_limit_remaining = response.headers.get('X-RateLimit-Remaining', 'unknown')
+                    if rate_limit_remaining != 'unknown':
+                        print(f"  🚦 Rate limit remaining: {rate_limit_remaining}")
+                    
+                    response.raise_for_status()
+                    
+                    issues = response.json()
+                    if not issues:
+                        break  # No more issues for this label
+                    
+                    # Filter out pull requests and duplicates
+                    for issue in issues:
+                        if 'pull_request' not in issue and issue['number'] not in seen_issue_numbers:
+                            all_issues.append(issue)
+                            seen_issue_numbers.add(issue['number'])
+                    
+                    print(f"  📄 Label '{label}' page {page}: {len(issues)} issues ({len([i for i in issues if 'pull_request' not in i])} after PR filter)")
+                    
+                    page += 1
+                    
+                    # Limit pages for rate limiting
+                    max_pages = 2 if not GITHUB_TOKEN else 3
+                    if page > max_pages:
+                        print(f"  ⚠️ Reached page limit ({max_pages}) for label '{label}' in {repo}")
+                        break
+                        
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 403:
+                        rate_limit_remaining = e.response.headers.get('X-RateLimit-Remaining', '0')
+                        if rate_limit_remaining == '0':
+                            print(f"❌ Rate limit exceeded for {repo} while fetching label '{label}'. Try again later or add GITHUB_TOKEN.")
+                            return all_issues  # Return what we have so far
+                    print(f"❌ HTTP error fetching label '{label}' from {repo}: {e}")
+                    break
+                    
+                except Exception as e:
+                    print(f"❌ Error fetching label '{label}' from {repo}: {e}")
+                    break
+        
+        print(f"✅ Fetched {len(all_issues)} total filtered issues from {repo}")
+        return all_issues
+    
+    # For non-Azure repos, use the original logic
+    else:
+        print(f"  📋 Fetching all issues from non-Azure repo: {repo}")
+        page = 1
+        
+        while True:
+            try:
+                # Get both open and closed issues
+                url = f"{GITHUB_API_BASE}/repos/{repo}/issues"
+                params = {
+                    'state': 'all',  # Include both open and closed
+                    'per_page': per_page,
+                    'page': page,
+                    'sort': 'updated',
+                    'direction': 'desc'
+                }
             
-            response = requests.get(url, headers=get_github_headers(), params=params)
-            
-            # Check rate limit headers
-            rate_limit_remaining = response.headers.get('X-RateLimit-Remaining', 'unknown')
-            rate_limit_reset = response.headers.get('X-RateLimit-Reset', 'unknown')
-            
-            if rate_limit_remaining != 'unknown':
-                print(f"  🚦 Rate limit remaining: {rate_limit_remaining}")
-            
-            response.raise_for_status()
-            
-            issues = response.json()
-            if not issues:
-                break  # No more issues
-            
-            # Filter out pull requests (they have 'pull_request' key)
-            issues = [issue for issue in issues if 'pull_request' not in issue]
-            
-            all_issues.extend(issues)
-            print(f"  📄 Fetched page {page}: {len(issues)} issues")
-            
-            page += 1
-            
-            # Adjust page limit based on authentication status to respect rate limits
-            if not GITHUB_TOKEN:
-                # Unauthenticated: limit to 2 pages per repo to stay within 60 req/hour
-                # With 14 repos, that's 28 requests, leaving room for other API calls
-                max_pages = 2
-            else:
-                # Authenticated: can use more pages
-                max_pages = 5
-            
-            if page > max_pages:
-                print(f"  ⚠️ Reached page limit ({max_pages}) for {repo}")
+                response = requests.get(url, headers=get_github_headers(), params=params)
+                
+                # Check rate limit headers
+                rate_limit_remaining = response.headers.get('X-RateLimit-Remaining', 'unknown')
+                rate_limit_reset = response.headers.get('X-RateLimit-Reset', 'unknown')
+                
+                if rate_limit_remaining != 'unknown':
+                    print(f"  🚦 Rate limit remaining: {rate_limit_remaining}")
+                
+                response.raise_for_status()
+                
+                issues = response.json()
+                if not issues:
+                    break  # No more issues
+                
+                # Filter out pull requests (they have 'pull_request' key)
+                issues = [issue for issue in issues if 'pull_request' not in issue]
+                
+                all_issues.extend(issues)
+                print(f"  � Fetched page {page}: {len(issues)} issues")
+                
+                page += 1
+                
+                # Adjust page limit based on authentication status to respect rate limits
+                if not GITHUB_TOKEN:
+                    # Unauthenticated: limit to 2 pages per repo to stay within 60 req/hour
+                    # With 14 repos, that's 28 requests, leaving room for other API calls
+                    max_pages = 2
+                else:
+                    # Authenticated: can use more pages
+                    max_pages = 5
+                
+                if page > max_pages:
+                    print(f"  ⚠️ Reached page limit ({max_pages}) for {repo}")
+                    break
+                    
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 403:
+                    rate_limit_remaining = e.response.headers.get('X-RateLimit-Remaining', '0')
+                    if rate_limit_remaining == '0':
+                        print(f"❌ Rate limit exceeded for {repo}. Try again later or add GITHUB_TOKEN.")
+                        sync_status['errors'].append(f"Rate limit exceeded for {repo}")
+                    else:
+                        print(f"❌ Forbidden error for {repo}: {e}")
+                        sync_status['errors'].append(f"Forbidden error for {repo}: {str(e)}")
+                else:
+                    print(f"❌ HTTP error fetching issues from {repo}: {e}")
+                    sync_status['errors'].append(f"HTTP error fetching {repo}: {str(e)}")
                 break
                 
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 403:
-                rate_limit_remaining = e.response.headers.get('X-RateLimit-Remaining', '0')
-                if rate_limit_remaining == '0':
-                    print(f"❌ Rate limit exceeded for {repo}. Try again later or add GITHUB_TOKEN.")
-                    sync_status['errors'].append(f"Rate limit exceeded for {repo}")
-                else:
-                    print(f"❌ Forbidden error for {repo}: {e}")
-                    sync_status['errors'].append(f"Forbidden error for {repo}: {str(e)}")
-            else:
-                print(f"❌ HTTP error fetching issues from {repo}: {e}")
-                sync_status['errors'].append(f"HTTP error fetching {repo}: {str(e)}")
-            break
-            
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Network error fetching issues from {repo}: {e}")
-            sync_status['errors'].append(f"Network error fetching {repo}: {str(e)}")
-            break
-            
-        except Exception as e:
-            print(f"❌ Unexpected error fetching {repo}: {e}")
-            sync_status['errors'].append(f"Unexpected error for {repo}: {str(e)}")
-            break
-    
-    print(f"✅ Fetched {len(all_issues)} total issues from {repo}")
-    return all_issues
+            except requests.exceptions.RequestException as e:
+                print(f"❌ Network error fetching issues from {repo}: {e}")
+                sync_status['errors'].append(f"Network error fetching {repo}: {str(e)}")
+                break
+                
+            except Exception as e:
+                print(f"❌ Unexpected error fetching {repo}: {e}")
+                sync_status['errors'].append(f"Unexpected error for {repo}: {str(e)}")
+                break
+        
+        print(f"✅ Fetched {len(all_issues)} total issues from {repo}")
+        return all_issues
 
 def update_database_with_issues(repo, issues):
     """Update the database with fetched issues"""
@@ -393,15 +629,40 @@ def update_database_with_issues(repo, issues):
                 state = issue['state']
                 last_fetched = datetime.now(timezone.utc).isoformat()
                 
+                # Extract labels with colors
+                labels_json = extract_labels_with_colors(issue)
+                
+                # Extract assignees with info (new feature for multiple assignees)
+                assignees_json = extract_assignees_with_info(issue)
+                
+                # Extract PR references for additional mention context
+                pr_references = extract_pr_references(body, repo)
+                pr_content = ''
+                
+                # Optionally fetch content from a few PR references for mentions
+                # (Limited to avoid rate limiting - only first 2 PRs)
+                if pr_references and len(pr_references) <= 2:
+                    for pr_ref in pr_references[:2]:
+                        if pr_ref.get('is_same_repo', False):
+                            pr_num = pr_ref.get('number')
+                            if pr_num:
+                                pr_body = fetch_pr_content_for_mentions(repo, pr_num, get_github_headers())
+                                pr_content += ' ' + pr_body
+                
+                # Extract mentioned GitHub handles
+                mentioned_handles_json = extract_mentioned_handles(body, pr_content)
+                
                 # Insert or update issue
                 cursor.execute('''
                     INSERT OR REPLACE INTO issues (
                         repo, number, title, html_url, assignee_login, 
-                        created_at, updated_at, body, state, last_fetched
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        created_at, updated_at, body, state, last_fetched,
+                        labels, mentioned_handles, assignees
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     repo, number, title, html_url, assignee_login,
-                    created_at, updated_at, body, state, last_fetched
+                    created_at, updated_at, body, state, last_fetched,
+                    labels_json, mentioned_handles_json, assignees_json
                 ))
                 
                 updated_count += 1
@@ -419,6 +680,101 @@ def update_database_with_issues(repo, issues):
     except Exception as e:
         print(f"❌ Database error for {repo}: {e}")
         sync_status['errors'].append(f"Database error for {repo}: {str(e)}")
+        return 0
+
+def detect_and_mark_closed_issues(repo, current_open_issues):
+    """Detect issues that are no longer in the open issues list and mark them as closed"""
+    try:
+        # Try different database paths for local and Azure environments
+        db_paths = [
+            'github_issues.db',  # Local relative path
+            '/home/site/wwwroot/github_issues.db',  # Azure Linux App Service path
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')  # Absolute path relative to script
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    break
+            except Exception:
+                continue
+        
+        if not conn:
+            print(f"❌ Could not connect to database for closed issue detection in {repo}")
+            return 0
+        
+        cursor = conn.cursor()
+        
+        # Get all currently open issues in our database for this repo
+        cursor.execute('''
+            SELECT number FROM issues 
+            WHERE repo = ? AND state = 'open'
+        ''', (repo,))
+        
+        db_open_issues = {row[0] for row in cursor.fetchall()}
+        
+        # Get the issue numbers from the current GitHub open issues
+        current_open_numbers = {issue['number'] for issue in current_open_issues}
+        
+        # Find issues that are in our database as open but not in current GitHub open issues
+        closed_issues = db_open_issues - current_open_numbers
+        
+        closed_count = 0
+        if closed_issues:
+            print(f"🔒 Detected {len(closed_issues)} issues that are no longer open in {repo}")
+            
+            # Mark these issues as closed in our database
+            for issue_number in closed_issues:
+                cursor.execute('''
+                    UPDATE issues 
+                    SET state = 'closed', last_fetched = ?
+                    WHERE repo = ? AND number = ? AND state = 'open'
+                ''', (datetime.now(timezone.utc).isoformat(), repo, issue_number))
+                
+                if cursor.rowcount > 0:
+                    closed_count += 1
+                    print(f"  📝 Marked issue #{issue_number} as closed")
+        
+        conn.commit()
+        conn.close()
+        
+        if closed_count > 0:
+            print(f"✅ Marked {closed_count} issues as closed for {repo}")
+        
+        return closed_count
+        
+    except Exception as e:
+        print(f"❌ Error detecting closed issues for {repo}: {e}")
+        return 0
+
+def detect_closed_issues_without_sync():
+    """Detect closed issues by fetching current open issues from GitHub without updating database"""
+    print("🔍 Detecting closed issues without full sync...")
+    
+    total_closed = 0
+    
+    try:
+        for i, repo in enumerate(REPOSITORIES):
+            print(f"\n📋 Checking repository {i+1}/{len(REPOSITORIES)}: {repo}")
+            
+            # Fetch current open issues from GitHub (without updating database)
+            issues = fetch_github_issues(repo)
+            
+            # Detect and mark closed issues
+            closed_count = detect_and_mark_closed_issues(repo, issues)
+            total_closed += closed_count
+            
+            # Add small delay to be respectful
+            if i < len(REPOSITORIES) - 1:
+                time.sleep(1)
+        
+        print(f"\n🎉 Closed issue detection completed! Marked {total_closed} issues as closed across {len(REPOSITORIES)} repositories")
+        return total_closed
+        
+    except Exception as e:
+        print(f"❌ Error during closed issue detection: {e}")
         return 0
 
 def sync_all_repositories():
@@ -447,9 +803,15 @@ def sync_all_repositories():
             # Fetch issues from GitHub
             issues = fetch_github_issues(repo)
             
-            # Update database
+            # Detect and mark closed issues (issues that are no longer in the open list)
+            closed_count = detect_and_mark_closed_issues(repo, issues)
+            
+            # Update database with current open issues
             updated_count = update_database_with_issues(repo, issues)
             total_updated += updated_count
+            
+            if closed_count > 0:
+                print(f"  🔒 Marked {closed_count} issues as closed")
             
             # Add delay between repositories to be respectful to GitHub API
             if i < len(REPOSITORIES) - 1:  # Don't delay after the last repo
@@ -486,6 +848,10 @@ def start_sync_scheduler():
     
     print(f"⏰ Starting sync scheduler (every 24 hours at 2:00 AM UTC)")
     print(f"🔑 GitHub API access: {auth_status} ({rate_limit})")
+    
+    # Update database schema if needed
+    print("🔧 Checking database schema...")
+    update_database_schema()
     
     try:
         # Schedule daily sync at 2:00 AM UTC to avoid peak hours
@@ -604,16 +970,25 @@ def get_last_sync_time():
         print(f"Error getting last sync time: {e}")
         return "Sync status unknown"
 
-def get_issues_from_db():
-    """Get all issues from database"""
+def get_state_button_text(state):
+    """Get button text for state toggle"""
+    if state == 'open':
+        return 'Open'
+    elif state == 'closed':
+        return 'Closed'
+    else:
+        return 'Open'
+
+def get_issues_from_db(state_filter='open'):
+    """Get issues from database with optional state filtering"""
     # Create a custom span for database operations
     if tracer:
         with tracer.start_as_current_span("get_issues_from_db") as span:
-            return _get_issues_from_db_internal(span)
+            return _get_issues_from_db_internal(span, state_filter)
     else:
-        return _get_issues_from_db_internal(None)
+        return _get_issues_from_db_internal(None, state_filter)
 
-def _get_issues_from_db_internal(span=None):
+def _get_issues_from_db_internal(span=None, state_filter='open'):
     """Internal function to get issues from database with telemetry"""
     try:
         if span:
@@ -652,18 +1027,63 @@ def _get_issues_from_db_internal(span=None):
         # SQLite operations are automatically instrumented by Azure Monitor
         cursor = conn.cursor()
         
-        cursor.execute('''
-            SELECT * FROM issues 
-            ORDER BY created_at DESC
-        ''')
+        # Build the query based on state filter
+        if state_filter == 'all':
+            query = '''
+                SELECT * FROM issues 
+                ORDER BY created_at DESC
+            '''
+            cursor.execute(query)
+        else:
+            query = '''
+                SELECT * FROM issues 
+                WHERE state = ?
+                ORDER BY created_at DESC
+            '''
+            cursor.execute(query, (state_filter,))
+        
+        if span:
+            span.set_attribute("query.state_filter", state_filter)
         
         issues = []
         for row in cursor.fetchall():
             issue = dict(row)
             # Map repo to repository for compatibility
             issue['repository'] = issue['repo']
-            # Set empty labels array since labels aren't stored in this schema
-            issue['labels'] = []
+            
+            # Parse labels JSON (with fallback for old records)
+            try:
+                if 'labels' in issue and issue['labels']:
+                    issue['labels'] = json.loads(issue['labels'])
+                else:
+                    issue['labels'] = []
+            except (json.JSONDecodeError, TypeError):
+                issue['labels'] = []
+            
+            # Parse mentioned handles JSON (with fallback for old records)
+            try:
+                if 'mentioned_handles' in issue and issue['mentioned_handles']:
+                    issue['mentioned_handles'] = json.loads(issue['mentioned_handles'])
+                else:
+                    issue['mentioned_handles'] = []
+            except (json.JSONDecodeError, TypeError):
+                issue['mentioned_handles'] = []
+            
+            # Parse assignees JSON (with fallback for old records)
+            try:
+                if 'assignees' in issue and issue['assignees']:
+                    issue['assignees'] = json.loads(issue['assignees'])
+                else:
+                    issue['assignees'] = []
+            except (json.JSONDecodeError, TypeError):
+                issue['assignees'] = []
+            
+            # Ensure comments field exists (with fallback for old records)
+            if 'comments' not in issue:
+                issue['comments'] = ''
+            elif issue['comments'] is None:
+                issue['comments'] = ''
+            
             issues.append(issue)
         
         conn.close()
@@ -703,11 +1123,14 @@ def get_sample_issues():
             'created_at': '2025-01-01T00:00:00Z',
             'updated_at': '2025-01-01T00:00:00Z',
             'body': 'This is a sample issue displayed when the database is not available.',
-            'labels': [],
+            'labels': [{'name': 'sample', 'color': '00ff00', 'description': 'Sample label'}],
+            'mentioned_handles': ['octocat'],
+            'assignees': [],  # Empty array for sample issue
+            'comments': '',  # Empty comments for sample issue
             'linked_pr': None,
             'last_fetched': '2025-01-01T00:00:00Z',
             'triage': 0,
-            'priority': 2
+            'priority': -1  # Correct default: "Not Set"
         }
     ]
 
@@ -723,7 +1146,6 @@ def group_issues_by_repo(issues):
 
 def extract_pr_references(issue_body, repo_name):
     """Extract PR references from issue body text"""
-    import re
     
     if not issue_body:
         return []
@@ -824,6 +1246,71 @@ def format_pr_references(pr_references):
     
     return ', '.join(formatted_refs)
 
+def format_labels_for_display(labels):
+    """Format labels with colors for display in the dashboard"""
+    if not labels:
+        return '<span class="text-muted">None</span>'
+    
+    formatted_labels = []
+    for label in labels:
+        name = html.escape(label.get('name', ''))
+        color = label.get('color', 'cccccc')
+        # Handle None description values properly
+        description_raw = label.get('description', '') or ''
+        description = html.escape(description_raw)
+        
+        # Calculate text color based on background color brightness
+        # Convert hex to RGB and calculate brightness
+        try:
+            r = int(color[0:2], 16)
+            g = int(color[2:4], 16)
+            b = int(color[4:6], 16)
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            text_color = '#000000' if brightness > 128 else '#ffffff'
+        except:
+            text_color = '#000000'
+        
+        title_text = f"title=\"{description}\"" if description else ""
+        formatted_labels.append(
+            f'<span class="badge" style="background-color: #{color}; color: {text_color}; margin-right: 4px;" {title_text}>{name}</span>'
+        )
+    
+    return ''.join(formatted_labels)
+
+def format_assignees_for_display(assignees, fallback_assignee=None):
+    """Format multiple assignees for display in the dashboard"""
+    # If we have the new assignees array, use it
+    if assignees and len(assignees) > 0:
+        formatted_assignees = []
+        for assignee in assignees:
+            login = assignee.get('login', '')
+            if login:
+                formatted_assignees.append(
+                    f'<a href="https://github.com/{html.escape(login)}" target="_blank" class="assignee-link">@{html.escape(login)}</a>'
+                )
+        
+        if formatted_assignees:
+            return ', '.join(formatted_assignees)
+    
+    # Fallback to the old single assignee field for backwards compatibility
+    if fallback_assignee:
+        return f'<a href="https://github.com/{html.escape(fallback_assignee)}" target="_blank" class="assignee-link">@{html.escape(fallback_assignee)}</a>'
+    
+    return '<span class="text-muted">Unassigned</span>'
+
+def format_mentions_for_display(mentioned_handles):
+    """Format mentioned GitHub handles for display in the dashboard"""
+    if not mentioned_handles:
+        return '<span class="text-muted">None</span>'
+    
+    formatted_mentions = []
+    for handle in mentioned_handles:
+        formatted_mentions.append(
+            f'<a href="https://github.com/{html.escape(handle)}" target="_blank" class="mention-link">@{html.escape(handle)}</a>'
+        )
+    
+    return ', '.join(formatted_mentions)
+
 def format_priority_text(priority):
     """Format priority value as display text"""
     priority_map = {
@@ -865,7 +1352,7 @@ def get_repo_color_class(repo):
     }
     return color_classes.get(category, 'default-theme')
 
-def generate_repo_section(repo, issues, is_first=False):
+def generate_repo_section(repo, issues, is_first=False, current_state='open'):
     """Generate HTML section for a repository"""
     # Determine language group
     if repo in ['Azure/azure-sdk-for-python', 'open-telemetry/opentelemetry-python', 'open-telemetry/opentelemetry-python-contrib']:
@@ -883,6 +1370,10 @@ def generate_repo_section(repo, issues, is_first=False):
     # Get color theme for this repository
     color_class = get_repo_color_class(repo)
     repo_category = get_repo_category(repo)
+    
+    # Add state-specific styling
+    state_class = "closed-issues" if current_state == 'closed' else ""
+    header_style = 'style="background-color: #4a4a4a; color: #e0e0e0;"' if current_state == 'closed' else ""
     
     repo_name = repo.split('/')[-1]
     repo_id = repo.replace('/', '-').replace('.', '-')
@@ -932,32 +1423,66 @@ def generate_repo_section(repo, issues, is_first=False):
             updated_age_class = "unknown"
             updated_display = issue['updated_at'][:10] if issue['updated_at'] else 'N/A'
         
-        # Get assignee information
-        assignee = issue.get('assignee_login')
-        if assignee:
-            assignee_display = f'<a href="https://github.com/{assignee}" target="_blank">@{assignee}</a>'
+        # Get assignee information (support both new multiple assignees and old single assignee)
+        assignees = issue.get('assignees', [])
+        fallback_assignee = issue.get('assignee_login')
+        assignee_display = format_assignees_for_display(assignees, fallback_assignee)
+        
+        # For sorting purposes, create a simplified assignee string
+        if assignees and len(assignees) > 0:
+            assignee_sort_key = assignees[0].get('login', 'zzz_unassigned').lower()
+        elif fallback_assignee:
+            assignee_sort_key = fallback_assignee.lower()
         else:
-            assignee_display = 'Unassigned'
+            assignee_sort_key = 'zzz_unassigned'
         
         # Extract PR references from issue body instead of using database linked_pr field
         pr_references = extract_pr_references(issue.get('body', ''), repo)
         pr_display = format_pr_references(pr_references)
         
+        # Format labels for display
+        labels_display = format_labels_for_display(issue.get('labels', []))
+        
+        # Format mentions for display
+        mentions_display = format_mentions_for_display(issue.get('mentioned_handles', []))
+        
         # Get triage and priority information
         triage = issue.get('triage', 0)
         priority = issue.get('priority', -1)
         
+        # Get parsed assignees (should already be a list from database loading)
+        assignees_data = issue.get('assignees', [])
+        print(f"DEBUG: Issue #{issue['number']} assignees: {assignees_data} (type: {type(assignees_data)})")
+        
+        # Prepare safe JSON data for modal (properly escaped for JavaScript)
+        modal_data = {
+            'repo': repo,
+            'number': issue['number'],
+            'title': issue['title'],
+            'htmlUrl': issue['html_url'],
+            'triage': triage,
+            'priority': priority,
+            'comments': issue.get('comments', ''),
+            'assignees': assignees_data,
+            'labels': issue.get('labels', []),
+            'mentions': issue.get('mentioned_handles', [])
+        }
+        
+        # Convert to JSON and escape for HTML attributes
+        modal_data_json = html.escape(json.dumps(modal_data))
+        
         issue_rows += f"""
         <tr data-repo="{html.escape(repo)}" data-number="{issue['number']}" 
             data-title="{html.escape(issue['title'].lower())}" 
-            data-assignee="{html.escape(assignee_display.lower() if assignee_display != 'Unassigned' else 'zzz_unassigned')}"
+            data-assignee="{html.escape(assignee_sort_key)}"
             data-created="{html.escape(issue['created_at'])}" 
             data-updated="{html.escape(issue['updated_at'])}"
             data-triage="{triage}"
             data-priority="{priority}">
             <td style="text-align: center;">
                 <button class="btn btn-sm btn-outline-primary edit-btn" 
-                        onclick="openIssueModal('{html.escape(repo)}', {issue['number']}, '{html.escape(issue['title'])}', '{issue['html_url']}', {triage}, {priority})"
+                        data-modal-data="{modal_data_json}"
+                        onclick="openIssueModalFromData(this)"
                         title="Edit issue details">
                     <i class="fas fa-edit"></i>
                 </button>
@@ -967,6 +1492,8 @@ def generate_repo_section(repo, issues, is_first=False):
             </td>
             <td>{assignee_display}</td>
             <td>{pr_display}</td>
+            <td>{labels_display}</td>
+            <td>{mentions_display}</td>
             <td class="{created_age_class}">{issue['created_at'][:10]}</td>
             <td class="{updated_age_class}">{updated_display}</td>
             <td class="triage-display">
@@ -978,32 +1505,48 @@ def generate_repo_section(repo, issues, is_first=False):
         </tr>
         """
     
+    # Get state button text
+    state_button_text = get_state_button_text(current_state)
+    
     return f"""
     <div class="repo-section{active_class} {color_class}" id="repo-{repo_id}" data-language="{lang_class}" data-repo-name="{repo}" data-category="{repo_category}">
         <div class="repo-header{active_class} {color_class}" onclick="toggleSection('{repo_id}')">
             <h2>
                 <a href="https://github.com/{repo}" target="_blank">{repo_name}</a>
-                <span class="issue-count">({issue_count} issues)</span>
+                <span class="category-badge {color_class}">{issue_count}</span>
                 <span class="category-badge {color_class}">{repo_category.upper()}</span>
             </h2>
         </div>
-        <div class="controls">
+        <div class="controls d-flex justify-content-between align-items-center">
             <input type="text" class="form-control search-box" id="search-{repo_id}" 
                    placeholder="🔍 Search issues..." 
-                   onkeyup="filterTable('{repo_id}', this.value)">
+                   onkeyup="filterTable('{repo_id}', this.value)" style="flex: 1; margin-right: 10px;">
+            <div class="state-controls">
+                <div class="toggle-switch" onclick="toggleIssueState()">
+                    <input type="checkbox" id="state-toggle-{repo_id}" class="toggle-input" 
+                           {'checked' if current_state == 'closed' else ''}>
+                    <label for="state-toggle-{repo_id}" class="toggle-label">
+                        <span class="toggle-text toggle-open">OPEN</span>
+                        <span class="toggle-text toggle-closed">CLOSED</span>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
         </div>
         <div class="table-container">
-            <table class="table table-hover table-striped issues-table {color_class}" id="table-{repo_id}">
-                <thead class="table-header {color_class}">
+            <table class="table table-hover table-striped issues-table {color_class} {state_class}" id="table-{repo_id}">
+                <thead class="table-header {color_class}" {header_style}>
                     <tr>
                         <th style="width: 60px;">Edit</th>
                         <th class="sortable" data-column="title" onclick="sortTable('{repo_id}', 'title')">
                             Title <i class="fas fa-sort sort-icon"></i>
                         </th>
                         <th class="sortable" data-column="assignee" onclick="sortTable('{repo_id}', 'assignee')">
-                            Assignee <i class="fas fa-sort sort-icon"></i>
+                            Assignees <i class="fas fa-sort sort-icon"></i>
                         </th>
                         <th>Related PRs/Issues</th>
+                        <th>Labels</th>
+                        <th>Mentions</th>
                         <th class="sortable" data-column="created" onclick="sortTable('{repo_id}', 'created')">
                             Created <i class="fas fa-sort sort-icon"></i>
                         </th>
@@ -1324,16 +1867,22 @@ def _dashboard_internal(span=None):
     selected_repo = request.args.get('repo', '')
     selected_repo = unquote(selected_repo) if selected_repo else ''
     
+    # Get the state filter from query parameter (default to 'open')
+    show_state = request.args.get('state', 'open')
+    if show_state not in ['open', 'closed', 'all']:
+        show_state = 'open'  # Default to open if invalid value
+    
     if span:
         span.set_attribute("dashboard.selected_repo", selected_repo)
+        span.set_attribute("dashboard.show_state", show_state)
         span.set_attribute("request.method", "GET")
         span.set_attribute("request.user_agent", request.headers.get('User-Agent', 'unknown'))
-        logger.info(f"Dashboard telemetry span active with selected_repo: {selected_repo}")
+        logger.info(f"Dashboard telemetry span active with selected_repo: {selected_repo}, state: {show_state}")
     else:
         logger.warning("Dashboard telemetry span is None - telemetry may not be configured")
     
     # Get issues from database
-    issues = get_issues_from_db()
+    issues = get_issues_from_db(state_filter=show_state)
     if not issues:
         if span:
             span.set_attribute("dashboard.issues_found", False)
@@ -1367,7 +1916,7 @@ def _dashboard_internal(span=None):
     for repo, repo_issues in repo_groups.items():
         repo_id = repo.replace('/', '-').replace('.', '-')
         
-        repo_sections += generate_repo_section(repo, repo_issues, is_first)
+        repo_sections += generate_repo_section(repo, repo_issues, is_first, show_state)
         
         # Generate navigation link for Bootstrap dropdown with color coding
         repo_name = repo.split('/')[-1]
@@ -1414,12 +1963,17 @@ def _dashboard_internal(span=None):
     html = html.replace('{stale_issues}', str(stale_issues))
     html = html.replace('{database_info_text}', get_last_sync_time())
     html = html.replace('{selected_repo}', selected_repo)
+    html = html.replace('{current_state}', show_state)
+    html = html.replace('{state_button_text}', get_state_button_text(show_state))
     html = html.replace('{group_counts_script}', f'''
     <script>
         // Update navbar badge counts
         document.getElementById('navbar-nodejs-count').textContent = '{nodejs_count}';
         document.getElementById('navbar-python-count').textContent = '{python_count}';
         document.getElementById('navbar-browser-count').textContent = '{browser_count}';
+        
+        // Set current state for state toggle functionality
+        window.currentState = '{show_state}';
     </script>
     ''')
     
@@ -1461,16 +2015,17 @@ def update_issue():
         number = data.get('number')
         triage = 1 if data.get('triage') else 0
         priority = int(data.get('priority', -1))
-        print(f"🎯 Updating issue #{number} in {repo}: triage={triage}, priority={priority}")
+        comments = data.get('comments', '').strip()  # Get comments from request
+        print(f"🎯 Updating issue #{number} in {repo}: triage={triage}, priority={priority}, comments='{comments[:50]}...'")
         
         conn = sqlite3.connect('github_issues.db')
         cursor = conn.cursor()
         
         cursor.execute('''
             UPDATE issues 
-            SET triage = ?, priority = ? 
+            SET triage = ?, priority = ?, comments = ?
             WHERE repo = ? AND number = ?
-        ''', (triage, priority, repo, number))
+        ''', (triage, priority, comments, repo, number))
         
         conn.commit()
         conn.close()
@@ -1721,6 +2276,36 @@ def telemetry_test():
             'message': f'Telemetry test failed: {str(e)}',
             'telemetry_enabled': True,
             'error_type': type(e).__name__
+        }), 500
+
+@app.route('/api/detect-closed-issues', methods=['POST'])
+def api_detect_closed_issues():
+    """API endpoint to detect closed issues without full sync"""
+    try:
+        print("🔍 Starting closed issue detection (without sync)...")
+        closed_issues = detect_closed_issues_without_sync()
+        
+        if closed_issues:
+            print(f"✅ Detected {len(closed_issues)} newly closed issues")
+            return jsonify({
+                'status': 'success',
+                'message': f'Detected {len(closed_issues)} newly closed issues',
+                'closed_issues_count': len(closed_issues),
+                'closed_issues': [{'number': issue['number'], 'title': issue['title'], 'repository': issue['repository']} for issue in closed_issues]
+            })
+        else:
+            print("✅ No newly closed issues detected")
+            return jsonify({
+                'status': 'success',
+                'message': 'No newly closed issues detected',
+                'closed_issues_count': 0,
+                'closed_issues': []
+            })
+    except Exception as e:
+        print(f"❌ Error detecting closed issues: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Error detecting closed issues: {str(e)}'
         }), 500
 
 if __name__ == '__main__':
