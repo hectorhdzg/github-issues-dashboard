@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Azure Monitor Scripting SDKs GitHub Issues</title>
+    <title>Azure Monitor TelReach GitHub Issues</title>
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous">
     <!-- Font Awesome for icons -->
@@ -241,7 +241,8 @@
         /* Ensure issue count is visible on themed headers */
         .repo-header.otel-theme .issue-count,
         .repo-header.azure-theme .issue-count,
-        .repo-header.microsoft-theme .issue-count {
+        .repo-header.microsoft-theme .issue-count,
+        .repo-header.java-theme .issue-count {
             background: rgba(0,0,0,0.7);
             color: white;
         }
@@ -417,6 +418,61 @@
             display: block;
             font-size: 0.65rem;
             margin-top: 2px;
+        }
+        
+        /* Java theme - Red */
+        .java-theme .issues-table th {
+            background: #dc3545 !important;
+            border-color: #dc3545 !important;
+        }
+        
+        .java-theme .issues-table th.sortable:hover {
+            background: #c82333 !important;
+        }
+        
+        .repo-header.java-theme {
+            border-left: 4px solid #dc3545;
+            background: linear-gradient(90deg, rgba(220, 53, 69, 0.1) 0%, transparent 100%);
+            color: #333 !important;
+        }
+        
+        .repo-header.java-theme h2,
+        .repo-header.java-theme h2 a {
+            color: #333 !important;
+        }
+        
+        .repo-header.java-theme h2 a:hover {
+            color: #dc3545 !important;
+        }
+        
+        .category-badge.java-theme {
+            background: #dc3545;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
+        .dropdown-item.java-theme {
+            background: rgba(220, 53, 69, 0.05);
+        }
+        
+        .dropdown-item.java-theme:hover {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%) !important;
+        }
+        
+        .category-indicator.java-theme {
+            color: #dc3545;
+            font-weight: 600;
+            display: block;
+            font-size: 0.65rem;
+            margin-top: 2px;
+        }
+        
+        .dropdown-item:not(:hover).java-theme {
+            color: #dc3545;
         }
         
         /* Default theme - Gray */
@@ -973,6 +1029,111 @@
             font-weight: 500;
         }
         
+        /* Sync Statistics Styles */
+        .sync-stats-section {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            margin: 2rem 0;
+        }
+        
+        .sync-stats-section h3 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+        
+        .sync-stats-section h5 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #4a5568;
+            margin-bottom: 1rem;
+        }
+        
+        .sync-status-info {
+            margin: 2rem 0;
+        }
+        
+        .info-card {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            height: 100%;
+        }
+        
+        .info-card h5 {
+            color: #2d3748;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+        }
+        
+        .sync-time {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #4a5568;
+            margin-bottom: 0.5rem;
+        }
+        
+        .sync-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #48bb78;
+        }
+        
+        .status-indicator.in-progress {
+            background: #ed8936;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-indicator.error {
+            background: #f56565;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .repo-stats-table {
+            margin-top: 2rem;
+        }
+        
+        .repo-stats-table .table {
+            margin-bottom: 0;
+        }
+        
+        .repo-stats-table .repo-name {
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        .repo-stats-table .badge {
+            font-size: 0.85rem;
+            padding: 0.4rem 0.6rem;
+        }
+        
+        .repo-stats-table .table-responsive {
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .repo-stats-table thead {
+            background: #f1f5f9;
+        }
+        
         @keyframes fadeInUp {
             0% {
                 opacity: 0;
@@ -1024,6 +1185,32 @@
             .pagination-controls {
                 justify-content: center !important;
             }
+        }
+
+        /* Empty table message styling */
+        .empty-table-message {
+            padding: 2rem;
+            text-align: center;
+        }
+        
+        .empty-table-message i {
+            display: block;
+            margin-bottom: 1rem;
+        }
+        
+        .empty-table-message h5 {
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .empty-table-message p {
+            margin-bottom: 1rem;
+            font-size: 0.95rem;
+        }
+        
+        .empty-table-message .btn {
+            font-size: 0.85rem;
+            padding: 0.4rem 1rem;
         }
     </style>
     <script>
@@ -1426,21 +1613,56 @@
             const nodejsCount = document.getElementById('navbar-nodejs-count')?.textContent || '0';
             const pythonCount = document.getElementById('navbar-python-count')?.textContent || '0';
             const browserCount = document.getElementById('navbar-browser-count')?.textContent || '0';
+            const dotnetCount = document.getElementById('navbar-dotnet-count')?.textContent || '0';
+            const javaCount = document.getElementById('navbar-java-count')?.textContent || '0';
             
             // Calculate total
-            const totalCount = parseInt(nodejsCount) + parseInt(pythonCount) + parseInt(browserCount);
+            const totalCount = parseInt(nodejsCount) + parseInt(pythonCount) + parseInt(browserCount) + parseInt(dotnetCount) + parseInt(javaCount);
             
             // Update intro page stats
             const introNodejsCount = document.getElementById('intro-nodejs-count');
             const introPythonCount = document.getElementById('intro-python-count');
             const introBrowserCount = document.getElementById('intro-browser-count');
+            const introDotnetCount = document.getElementById('intro-dotnet-count');
+            const introJavaCount = document.getElementById('intro-java-count');
             const introTotalCount = document.getElementById('intro-total-count');
             
             if (introNodejsCount) introNodejsCount.textContent = nodejsCount;
             if (introPythonCount) introPythonCount.textContent = pythonCount;
             if (introBrowserCount) introBrowserCount.textContent = browserCount;
+            if (introDotnetCount) introDotnetCount.textContent = dotnetCount;
+            if (introJavaCount) introJavaCount.textContent = javaCount;
             if (introTotalCount) introTotalCount.textContent = totalCount.toString();
         }
+        
+        // Function to update sync status indicators
+        function updateSyncStatus() {
+            const syncInProgress = {sync_stats_in_progress};
+            const syncErrors = {sync_stats_errors};
+            const statusIndicator = document.getElementById('sync-status-indicator');
+            const statusText = document.getElementById('sync-status-text');
+            
+            if (statusIndicator && statusText) {
+                if (syncInProgress) {
+                    statusIndicator.className = 'status-indicator in-progress';
+                    statusText.textContent = 'Sync in Progress...';
+                    statusText.style.color = '#ed8936';
+                } else if (syncErrors > 0) {
+                    statusIndicator.className = 'status-indicator error';
+                    statusText.textContent = `Ready (${syncErrors} errors)`;
+                    statusText.style.color = '#f56565';
+                } else {
+                    statusIndicator.className = 'status-indicator';
+                    statusText.textContent = 'Ready';
+                    statusText.style.color = '#48bb78';
+                }
+            }
+        }
+        
+        // Call sync status update when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            updateSyncStatus();
+        });
         
         // Modal-related variables
         let currentModalIssue = null;
@@ -1811,7 +2033,7 @@
     <nav class="navbar navbar-expand-lg navbar-dark fixed-top navbar-custom">
         <div class="container">
             <a class="navbar-brand" href="#" onclick="clearRepoSelection()">
-                <i class="fas fa-bug"></i> Azure Monitor GitHub Issues
+                <i class="fas fa-bug"></i> Azure Monitor TelReach GitHub Issues
             </a>
             
             <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
@@ -1852,15 +2074,30 @@
                             {browser_nav_links}
                         </div>
                     </li>
-                </ul>
-                
-                <ul class="navbar-nav ml-auto">
-                    <li class="nav-item">
-                        <span class="navbar-text text-light" id="navbar-last-updated">
-                            <i class="fas fa-clock"></i> {database_info_text}
-                        </span>
+                    
+                    <!-- .NET Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="dotnetDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <i class="fab fa-microsoft language-icon"></i>.NET
+                            <span class="badge badge-count" id="navbar-dotnet-count">0</span>
+                        </a>
+                        <div class="dropdown-menu" aria-labelledby="dotnetDropdown" id="dotnet-dropdown-menu">
+                            {dotnet_nav_links}
+                        </div>
+                    </li>
+                    
+                    <!-- Java Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="javaDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <i class="fab fa-java language-icon"></i>Java
+                            <span class="badge badge-count" id="navbar-java-count">0</span>
+                        </a>
+                        <div class="dropdown-menu" aria-labelledby="javaDropdown" id="java-dropdown-menu">
+                            {java_nav_links}
+                        </div>
                     </li>
                 </ul>
+                
             </div>
         </div>
     </nav>
@@ -1911,31 +2148,94 @@
                             <span class="stat-label">Browser JS Issues</span>
                         </div>
                         <div class="stat-item">
+                            <span class="stat-number text-success" id="intro-dotnet-count">0</span>
+                            <span class="stat-label">.NET Issues</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number text-danger" id="intro-java-count">0</span>
+                            <span class="stat-label">Java Issues</span>
+                        </div>
+                        <div class="stat-item">
                             <span class="stat-number" id="intro-total-count">0</span>
                             <span class="stat-label">Total Issues</span>
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-        
-        <!-- Color Legend for Date Aging -->
-        <div class="legend">
-            <div class="legend-item">
-                <div class="legend-color recent"></div>
-                <span>Recent (0-14 days)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color medium"></div>
-                <span>Medium (2-4 weeks)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color old"></div>
-                <span>Old (1-2 months)</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color stale"></div>
-                <span>Stale (2+ months)</span>
+                
+                <!-- Sync Statistics Section -->
+                <div class="sync-stats-section mt-4">
+                    <h3><i class="fas fa-sync-alt"></i> Sync Statistics</h3>
+                    
+                    <!-- Overall Stats Grid -->
+                    <div class="stats-grid mb-4">
+                        <div class="stat-item">
+                            <span class="stat-number text-success">{sync_stats_total_open}</span>
+                            <span class="stat-label">Open Issues</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number text-secondary">{sync_stats_total_closed}</span>
+                            <span class="stat-label">Closed Issues</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number text-info">{sync_stats_new_24h}</span>
+                            <span class="stat-label">New (24h)</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number text-warning">{sync_stats_updated_24h}</span>
+                            <span class="stat-label">Updated (24h)</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Sync Status Info -->
+                    <div class="sync-status-info row mb-4">
+                        <div class="col-md-6">
+                            <div class="info-card">
+                                <h5><i class="fas fa-clock"></i> Last Sync</h5>
+                                <p class="sync-time">{sync_stats_last_sync}</p>
+                                <div class="sync-status">
+                                    <span class="status-indicator" id="sync-status-indicator"></span>
+                                    <span id="sync-status-text">Ready</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="info-card">
+                                <h5><i class="fas fa-chart-pie"></i> API Efficiency</h5>
+                                <p>PR/Mentions Processed: <strong>{sync_stats_pr_processed}</strong></p>
+                                <div class="progress">
+                                    <div class="progress-bar bg-info" role="progressbar" 
+                                         style="width: {sync_stats_pr_percentage}%" 
+                                         aria-valuenow="{sync_stats_pr_percentage}" 
+                                         aria-valuemin="0" aria-valuemax="100">
+                                        {sync_stats_pr_percentage}%
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Repository Stats Table -->
+                    <div class="repo-stats-table">
+                        <h5><i class="fas fa-table"></i> Repository Breakdown</h5>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th>Repository</th>
+                                        <th><i class="fas fa-exclamation-circle text-success"></i> Open</th>
+                                        <th><i class="fas fa-check-circle text-secondary"></i> Closed</th>
+                                        <th><i class="fas fa-plus text-info"></i> New (24h)</th>
+                                        <th><i class="fas fa-edit text-warning"></i> Updated (24h)</th>
+                                        <th><i class="fas fa-clock"></i> Last Updated</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {sync_repo_stats_table}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         

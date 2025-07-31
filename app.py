@@ -15,9 +15,28 @@ import re
 from flask import Flask, render_template_string, jsonify, request, session, redirect, url_for
 import sqlite3
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import unquote
 import uuid
+
+# Import timezone support with fallback
+try:
+    from zoneinfo import ZoneInfo
+    PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
+except ImportError:
+    # Fallback for Python < 3.9
+    try:
+        import pytz
+        PACIFIC_TZ = pytz.timezone("America/Los_Angeles")
+    except ImportError:
+        # If neither is available, use a simple UTC offset approximation
+        # This is less accurate as it doesn't handle DST changes
+        from datetime import timedelta
+        class SimplePacificTZ(timezone):
+            def __init__(self):
+                # Use UTC-8 as approximation (PST)
+                super().__init__(timedelta(hours=-8), "Pacific")
+        PACIFIC_TZ = SimplePacificTZ()
 
 # Azure Monitor OpenTelemetry SDK imports
 from azure.monitor.opentelemetry import configure_azure_monitor
@@ -231,9 +250,12 @@ GITHUB_API_BASE = 'https://api.github.com'
 REPOSITORIES = [
     'Azure/azure-sdk-for-js',
     'Azure/azure-sdk-for-python',
+    'Azure/azure-sdk-for-net',
     'microsoft/ApplicationInsights-js',
     'microsoft/ApplicationInsights-node.js',
     'microsoft/ApplicationInsights-node.js-native-metrics',
+    'microsoft/ApplicationInsights-dotnet',
+    'microsoft/ApplicationInsights-Java',
     'microsoft/DynamicProto-JS',
     'microsoft/applicationinsights-angularplugin-js',
     'microsoft/applicationinsights-react-js',
@@ -242,7 +264,9 @@ REPOSITORIES = [
     'open-telemetry/opentelemetry-js',
     'open-telemetry/opentelemetry-js-contrib',
     'open-telemetry/opentelemetry-python',
-    'open-telemetry/opentelemetry-python-contrib'
+    'open-telemetry/opentelemetry-python-contrib',
+    'open-telemetry/opentelemetry-dotnet',
+    'open-telemetry/opentelemetry-java'
 ]
 
 # Sync status tracking
@@ -323,6 +347,19 @@ def extract_mentioned_handles(issue_body, pr_references_text=''):
 def fetch_pr_content_for_mentions(repo, pr_number, headers):
     """Fetch PR content to extract mentions (with rate limiting consideration)"""
     try:
+        # Check rate limit before making request
+        rate_check_url = f"{GITHUB_API_BASE}/rate_limit"
+        rate_response = requests.get(rate_check_url, headers=headers, timeout=5)
+        
+        if rate_response.status_code == 200:
+            rate_data = rate_response.json()
+            remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 0)
+            
+            # Skip if we're running low on API quota (less than 10 requests left)
+            if remaining < 10:
+                print(f"  ⚠️ Skipping PR #{pr_number} content - low API quota ({remaining} requests left)")
+                return ''
+        
         pr_url = f"{GITHUB_API_BASE}/repos/{repo}/pulls/{pr_number}"
         response = requests.get(pr_url, headers=headers, timeout=10)
         
@@ -336,6 +373,11 @@ def fetch_pr_content_for_mentions(repo, pr_number, headers):
             if response.status_code == 200:
                 issue_data = response.json()
                 return issue_data.get('body', '')
+        elif response.status_code == 403:
+            # Rate limit hit
+            print(f"  ⚠️ Rate limit hit while fetching PR #{pr_number}")
+            return ''
+            
     except Exception as e:
         print(f"  ⚠️ Could not fetch PR/issue #{pr_number}: {e}")
     
@@ -416,6 +458,12 @@ def update_database_schema():
                 updated_rows = cursor.rowcount
                 print(f"🔧 Fixed {updated_rows} issues with incorrect default priority (2 -> -1)")
         
+        # Add pr_mentions_last_updated column if it doesn't exist (to track Phase 2 execution)
+        if 'pr_mentions_last_updated' not in columns:
+            print("📋 Adding 'pr_mentions_last_updated' column to issues table...")
+            cursor.execute("ALTER TABLE issues ADD COLUMN pr_mentions_last_updated TEXT DEFAULT NULL")
+            print("✅ Added 'pr_mentions_last_updated' column")
+        
         conn.commit()
         conn.close()
         return True
@@ -425,8 +473,15 @@ def update_database_schema():
         return False
 
 def fetch_github_issues(repo, per_page=100):
-    """Fetch issues from a GitHub repository"""
-    print(f"🔄 Fetching issues from {repo}...")
+    """
+    Fetch only open issues from a GitHub repository.
+    
+    For Azure repos: Filters by monitoring labels and fetches open issues for each label.
+    For other repos: Fetches all open issues.
+    
+    Returns: List of open issues from GitHub API
+    """
+    print(f"🔄 Fetching open issues from {repo}...")
     
     # Check rate limit status before starting
     if not GITHUB_TOKEN:
@@ -441,20 +496,36 @@ def fetch_github_issues(repo, per_page=100):
         "Monitor - ApplicationInsights"
     ]
     
+    # Add LiveMetrics label specifically for .NET repositories
+    dotnet_labels = azure_monitor_labels + ["Monitor - LiveMetrics"]
+    
     all_issues = []
     seen_issue_numbers = set()  # Track duplicates when fetching by label
     
-    # For Azure repos, fetch issues by each monitoring label separately
+    # Determine which labels to use based on repository type
+    labels_to_use = []
     if repo.startswith('Azure/'):
-        print(f"  🏷️ Filtering Azure repo '{repo}' for monitoring labels: {', '.join(azure_monitor_labels)}")
+        if 'dotnet' in repo.lower() or repo == 'Azure/azure-sdk-for-net':
+            labels_to_use = dotnet_labels  # Use Azure + LiveMetrics labels for .NET
+        else:
+            labels_to_use = azure_monitor_labels  # Use standard Azure labels
+    elif repo == 'microsoft/ApplicationInsights-dotnet':
+        labels_to_use = dotnet_labels  # Use Azure + LiveMetrics labels for .NET ApplicationInsights
+    elif repo.startswith('microsoft/') and any(azure_term in repo for azure_term in ['ApplicationInsights', 'azure']):
+        labels_to_use = azure_monitor_labels  # Use Azure labels for other Microsoft Azure-related repos
+    
+    # For repos with specific label filtering, fetch issues by each monitoring label separately
+    if labels_to_use:
+        repo_type = 'Azure' if repo.startswith('Azure/') else 'Microsoft Azure-related'
+        print(f"  🏷️ Filtering {repo_type} repo '{repo}' for monitoring labels: {', '.join(labels_to_use)}")
         
-        for label in azure_monitor_labels:
+        for label in labels_to_use:
             page = 1
             while True:
                 try:
                     url = f"{GITHUB_API_BASE}/repos/{repo}/issues"
                     params = {
-                        'state': 'all',
+                        'state': 'open',  # Only fetch open issues
                         'per_page': per_page,
                         'page': page,
                         'sort': 'updated',
@@ -486,7 +557,7 @@ def fetch_github_issues(repo, per_page=100):
                     page += 1
                     
                     # Limit pages for rate limiting
-                    max_pages = 2 if not GITHUB_TOKEN else 3
+                    max_pages = 1 if not GITHUB_TOKEN else 2
                     if page > max_pages:
                         print(f"  ⚠️ Reached page limit ({max_pages}) for label '{label}' in {repo}")
                         break
@@ -504,20 +575,20 @@ def fetch_github_issues(repo, per_page=100):
                     print(f"❌ Error fetching label '{label}' from {repo}: {e}")
                     break
         
-        print(f"✅ Fetched {len(all_issues)} total filtered issues from {repo}")
+        print(f"✅ Fetched {len(all_issues)} total filtered open issues from {repo}")
         return all_issues
     
     # For non-Azure repos, use the original logic
     else:
-        print(f"  📋 Fetching all issues from non-Azure repo: {repo}")
+        print(f"  📋 Fetching open issues from non-Azure repo: {repo}")
         page = 1
         
         while True:
             try:
-                # Get both open and closed issues
+                # Get only open issues
                 url = f"{GITHUB_API_BASE}/repos/{repo}/issues"
                 params = {
-                    'state': 'all',  # Include both open and closed
+                    'state': 'open',  # Only fetch open issues
                     'per_page': per_page,
                     'page': page,
                     'sort': 'updated',
@@ -549,9 +620,9 @@ def fetch_github_issues(repo, per_page=100):
                 
                 # Adjust page limit based on authentication status to respect rate limits
                 if not GITHUB_TOKEN:
-                    # Unauthenticated: limit to 2 pages per repo to stay within 60 req/hour
-                    # With 14 repos, that's 28 requests, leaving room for other API calls
-                    max_pages = 2
+                    # Unauthenticated: very conservative limit to ensure we get through all 14 repos
+                    # 14 repos × 1 page = 14 requests, leaving 46 requests for other operations
+                    max_pages = 1
                 else:
                     # Authenticated: can use more pages
                     max_pages = 5
@@ -584,11 +655,11 @@ def fetch_github_issues(repo, per_page=100):
                 sync_status['errors'].append(f"Unexpected error for {repo}: {str(e)}")
                 break
         
-        print(f"✅ Fetched {len(all_issues)} total issues from {repo}")
+        print(f"✅ Fetched {len(all_issues)} total open issues from {repo}")
         return all_issues
 
-def update_database_with_issues(repo, issues):
-    """Update the database with fetched issues"""
+def update_database_with_issues_basic(repo, issues):
+    """Update the database with fetched issues - BASIC DATA ONLY (no PR/mentions fetching)"""
     if not issues:
         return 0
     
@@ -618,7 +689,7 @@ def update_database_with_issues(repo, issues):
         
         for issue in issues:
             try:
-                # Extract issue data
+                # Extract basic issue data (no PR fetching in this phase)
                 number = issue['number']
                 title = issue['title']
                 html_url = issue['html_url']
@@ -635,35 +706,38 @@ def update_database_with_issues(repo, issues):
                 # Extract assignees with info (new feature for multiple assignees)
                 assignees_json = extract_assignees_with_info(issue)
                 
-                # Extract PR references for additional mention context
-                pr_references = extract_pr_references(body, repo)
-                pr_content = ''
+                # Basic mentions extraction (from issue body only, no PR content)
+                mentioned_handles_json = extract_mentioned_handles(body, '')
                 
-                # Optionally fetch content from a few PR references for mentions
-                # (Limited to avoid rate limiting - only first 2 PRs)
-                if pr_references and len(pr_references) <= 2:
-                    for pr_ref in pr_references[:2]:
-                        if pr_ref.get('is_same_repo', False):
-                            pr_num = pr_ref.get('number')
-                            if pr_num:
-                                pr_body = fetch_pr_content_for_mentions(repo, pr_num, get_github_headers())
-                                pr_content += ' ' + pr_body
-                
-                # Extract mentioned GitHub handles
-                mentioned_handles_json = extract_mentioned_handles(body, pr_content)
-                
-                # Insert or update issue
+                # Insert or update issue (preserve custom user data)
+                # First try to update existing record, preserving comments, triage, and priority
                 cursor.execute('''
-                    INSERT OR REPLACE INTO issues (
-                        repo, number, title, html_url, assignee_login, 
-                        created_at, updated_at, body, state, last_fetched,
-                        labels, mentioned_handles, assignees
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    UPDATE issues SET 
+                        title = ?, html_url = ?, assignee_login = ?,
+                        created_at = ?, updated_at = ?, body = ?, state = ?, last_fetched = ?,
+                        labels = ?, mentioned_handles = ?, assignees = ?
+                    WHERE repo = ? AND number = ?
                 ''', (
-                    repo, number, title, html_url, assignee_login,
+                    title, html_url, assignee_login,
                     created_at, updated_at, body, state, last_fetched,
-                    labels_json, mentioned_handles_json, assignees_json
+                    labels_json, mentioned_handles_json, assignees_json,
+                    repo, number
                 ))
+                
+                # If no rows were updated, insert new record with default custom values
+                if cursor.rowcount == 0:
+                    cursor.execute('''
+                        INSERT INTO issues (
+                            repo, number, title, html_url, assignee_login, 
+                            created_at, updated_at, body, state, last_fetched,
+                            labels, mentioned_handles, assignees, comments, triage, priority
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        repo, number, title, html_url, assignee_login,
+                        created_at, updated_at, body, state, last_fetched,
+                        labels_json, mentioned_handles_json, assignees_json,
+                        '', 0, -1  # Default values for comments, triage, priority
+                    ))
                 
                 updated_count += 1
                 
@@ -674,7 +748,7 @@ def update_database_with_issues(repo, issues):
         conn.commit()
         conn.close()
         
-        print(f"✅ Updated {updated_count} issues for {repo}")
+        print(f"✅ Updated {updated_count} basic issue data for {repo}")
         return updated_count
         
     except Exception as e:
@@ -682,8 +756,188 @@ def update_database_with_issues(repo, issues):
         sync_status['errors'].append(f"Database error for {repo}: {str(e)}")
         return 0
 
+def update_pr_references_and_mentions():
+    """
+    Phase 2: Update PR references and mentions for issues that need updates.
+    This runs after all basic issue data has been fetched to ensure we have the latest issues first.
+    
+    Optimized to only process issues that:
+    1. Are recent (created within last 30 days) OR
+    2. Have been updated since their last PR/mentions processing OR
+    3. Have never had PR/mentions processing done
+    """
+    print("\n🔗 Phase 2: Updating PR references and mentions for eligible issues...")
+    
+    try:
+        # Check rate limit before starting phase 2
+        rate_check_url = f"{GITHUB_API_BASE}/rate_limit"
+        rate_response = requests.get(rate_check_url, headers=get_github_headers(), timeout=5)
+        
+        if rate_response.status_code == 200:
+            rate_data = rate_response.json()
+            remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 'unknown')
+            print(f"📊 API quota before PR/mentions phase: {remaining} requests remaining")
+            
+            if isinstance(remaining, int) and remaining < 50:
+                print(f"⚠️ Low API quota ({remaining} requests) - skipping PR/mentions phase to preserve quota")
+                return 0
+        
+        # Connect to database
+        db_paths = [
+            'github_issues.db',
+            '/home/site/wwwroot/github_issues.db',
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    break
+            except Exception:
+                continue
+        
+        if not conn:
+            print("❌ Could not connect to database for PR/mentions phase")
+            return 0
+        
+        cursor = conn.cursor()
+        
+        # Get issues that need PR/mentions updates based on multiple criteria
+        thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        current_time = datetime.now(timezone.utc).isoformat()
+        
+        # Smart query to find issues that need PR/mentions updates:
+        # 1. Recent issues (created within 30 days)
+        # 2. Issues where updated_at > pr_mentions_last_updated (issue was updated since last PR processing)
+        # 3. Issues where pr_mentions_last_updated is NULL (never processed)
+        cursor.execute('''
+            SELECT repo, number, body, created_at, updated_at, pr_mentions_last_updated
+            FROM issues 
+            WHERE state = 'open' 
+            AND (
+                created_at > ?  -- Recent issues (within 30 days)
+                OR pr_mentions_last_updated IS NULL  -- Never processed for PR/mentions
+                OR updated_at > pr_mentions_last_updated  -- Updated since last PR processing
+            )
+            ORDER BY 
+                CASE WHEN pr_mentions_last_updated IS NULL THEN 0 ELSE 1 END,  -- Prioritize never-processed
+                updated_at DESC  -- Then by most recently updated
+            LIMIT 150
+        ''', (thirty_days_ago,))
+        
+        eligible_issues = cursor.fetchall()
+        updated_count = 0
+        skipped_count = 0
+        
+        print(f"🔍 Found {len(eligible_issues)} issues eligible for PR/mentions processing")
+        
+        # Categorize issues for better logging
+        recent_issues = 0
+        never_processed = 0
+        updated_since_last_processing = 0
+        
+        for repo, number, body, created_at, updated_at, pr_mentions_last_updated in eligible_issues:
+            try:
+                # Categorize this issue for logging
+                issue_created = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                days_old = (datetime.now(timezone.utc) - issue_created).days
+                
+                if pr_mentions_last_updated is None:
+                    never_processed += 1
+                    reason = "never processed"
+                elif days_old <= 30:
+                    recent_issues += 1
+                    reason = f"recent ({days_old} days old)"
+                else:
+                    updated_since_last_processing += 1
+                    reason = "updated since last processing"
+                
+                # Check rate limit for each batch
+                if updated_count > 0 and updated_count % 20 == 0:
+                    rate_response = requests.get(rate_check_url, headers=get_github_headers(), timeout=5)
+                    if rate_response.status_code == 200:
+                        rate_data = rate_response.json()
+                        remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 0)
+                        if remaining < 10:
+                            print(f"⚠️ API quota low ({remaining}) - stopping PR/mentions phase")
+                            break
+                
+                pr_content = ''
+                
+                # Only fetch PR content for recent issues or those never processed
+                # Skip PR fetching for older issues that were just updated (to save API calls)
+                should_fetch_pr_content = (days_old <= 30) or (pr_mentions_last_updated is None)
+                
+                if should_fetch_pr_content:
+                    # Extract PR references for additional mention context
+                    pr_references = extract_pr_references(body, repo)
+                    
+                    # Limit to avoid rate limiting - only first 1 PR
+                    if pr_references and len(pr_references) <= 1:
+                        for pr_ref in pr_references[:1]:
+                            if pr_ref.get('is_same_repo', False):
+                                pr_num = pr_ref.get('number')
+                                if pr_num:
+                                    try:
+                                        pr_body = fetch_pr_content_for_mentions(repo, pr_num, get_github_headers())
+                                        pr_content += ' ' + pr_body
+                                        print(f"  📝 Fetched PR #{pr_num} content for {repo}#{number} ({reason})")
+                                    except Exception as e:
+                                        print(f"  ⚠️ Skipping PR #{pr_num} for {repo}#{number}: {e}")
+                else:
+                    skipped_count += 1
+                    print(f"  ⏭️ Skipped PR fetching for {repo}#{number} (older issue, {reason})")
+                
+                # Extract mentioned GitHub handles (from issue body and any fetched PR content)
+                mentioned_handles_json = extract_mentioned_handles(body, pr_content)
+                
+                # Update mentioned_handles and mark as processed
+                cursor.execute('''
+                    UPDATE issues SET 
+                        mentioned_handles = ?, 
+                        pr_mentions_last_updated = ?
+                    WHERE repo = ? AND number = ?
+                ''', (mentioned_handles_json, current_time, repo, number))
+                
+                if cursor.rowcount > 0:
+                    updated_count += 1
+                
+                # Small delay to be respectful
+                time.sleep(0.3)
+                
+            except Exception as e:
+                print(f"  ❌ Error updating PR/mentions for {repo}#{number}: {e}")
+                continue
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Updated PR references and mentions for {updated_count} issues")
+        print(f"📊 Phase 2 breakdown:")
+        print(f"   • Recent issues (≤30 days): {recent_issues}")
+        print(f"   • Never processed: {never_processed}")
+        print(f"   • Updated since last processing: {updated_since_last_processing}")
+        print(f"   • Skipped PR fetching (optimization): {skipped_count}")
+        
+        return updated_count
+        
+    except Exception as e:
+        print(f"❌ Error in PR/mentions phase: {e}")
+        return 0
+
 def detect_and_mark_closed_issues(repo, current_open_issues):
-    """Detect issues that are no longer in the open issues list and mark them as closed"""
+    """
+    Detect issues that are no longer in GitHub's open issues list and mark them as closed.
+    
+    This function compares:
+    - Issues we have stored as 'open' in our database
+    - Issues that GitHub currently returns as 'open'
+    
+    Any issues in our database marked as 'open' but not in GitHub's current open list
+    are assumed to have been closed and will be marked as 'closed' in our database.
+    """
     try:
         # Try different database paths for local and Azure environments
         db_paths = [
@@ -718,6 +972,15 @@ def detect_and_mark_closed_issues(repo, current_open_issues):
         # Get the issue numbers from the current GitHub open issues
         current_open_numbers = {issue['number'] for issue in current_open_issues}
         
+        # CRITICAL BUG FIX: Don't mark issues as closed if we didn't get any data from GitHub
+        # This happens when API rate limits are exceeded and current_open_issues is empty
+        if not current_open_issues and db_open_issues:
+            print(f"⚠️ Skipping closed issue detection for {repo} - no current issues fetched (likely rate limited)")
+            print(f"   Database has {len(db_open_issues)} open issues, but GitHub returned 0 issues")
+            print(f"   This could be due to rate limiting or API errors - not marking any issues as closed")
+            conn.close()
+            return 0
+        
         # Find issues that are in our database as open but not in current GitHub open issues
         closed_issues = db_open_issues - current_open_numbers
         
@@ -750,7 +1013,15 @@ def detect_and_mark_closed_issues(repo, current_open_issues):
         return 0
 
 def detect_closed_issues_without_sync():
-    """Detect closed issues by fetching current open issues from GitHub without updating database"""
+    """
+    Detect closed issues by fetching current open issues from GitHub without updating database.
+    
+    This is a lightweight operation that only:
+    1. Fetches current open issues from GitHub
+    2. Compares with issues marked as 'open' in our database  
+    3. Marks issues as 'closed' if they're no longer in GitHub's open list
+    4. Does NOT update the database with the fetched open issues
+    """
     print("🔍 Detecting closed issues without full sync...")
     
     total_closed = 0
@@ -760,10 +1031,10 @@ def detect_closed_issues_without_sync():
             print(f"\n📋 Checking repository {i+1}/{len(REPOSITORIES)}: {repo}")
             
             # Fetch current open issues from GitHub (without updating database)
-            issues = fetch_github_issues(repo)
+            open_issues = fetch_github_issues(repo)
             
             # Detect and mark closed issues
-            closed_count = detect_and_mark_closed_issues(repo, issues)
+            closed_count = detect_and_mark_closed_issues(repo, open_issues)
             total_closed += closed_count
             
             # Add small delay to be respectful
@@ -784,15 +1055,41 @@ def sync_all_repositories():
         return
     
     print("🚀 Starting GitHub repositories sync...")
+    print(f"🔑 GitHub API access: {'authenticated (5000/hour)' if GITHUB_TOKEN else 'unauthenticated (60/hour)'}")
+    
     sync_status['sync_in_progress'] = True
     sync_status['errors'] = []  # Clear previous errors
     
     total_updated = 0
     start_time = datetime.now(timezone.utc)
     
+    # Check initial rate limit
     try:
-        # Add delay between repos to respect rate limits, especially for unauthenticated requests
-        delay_between_repos = 2 if not GITHUB_TOKEN else 1
+        rate_check_url = f"{GITHUB_API_BASE}/rate_limit"
+        rate_response = requests.get(rate_check_url, headers=get_github_headers(), timeout=5)
+        
+        if rate_response.status_code == 200:
+            rate_data = rate_response.json()
+            remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 'unknown')
+            reset_time = rate_data.get('resources', {}).get('core', {}).get('reset', 'unknown')
+            print(f"📊 Initial API quota: {remaining} requests remaining")
+            
+            if isinstance(remaining, int) and remaining < 20:
+                print(f"⚠️ Low API quota ({remaining} requests). Consider waiting or adding GITHUB_TOKEN.")
+                if not GITHUB_TOKEN:
+                    print("💡 Add GITHUB_TOKEN environment variable to increase quota to 5000/hour")
+        else:
+            print("⚠️ Could not check rate limit status")
+    except Exception as e:
+        print(f"⚠️ Could not check initial rate limit: {e}")
+    
+    try:
+        # PHASE 1: Get basic issue data from all repositories first
+        print("📋 Phase 1: Fetching basic issue data from all repositories...")
+        
+        # Prioritize getting basic issue data from all repositories first
+        # Reduce delay for unauthenticated requests to get through more repos quickly
+        delay_between_repos = 1 if not GITHUB_TOKEN else 0.5
         
         for i, repo in enumerate(REPOSITORIES):
             if not sync_status['sync_in_progress']:  # Check if sync was cancelled
@@ -800,33 +1097,80 @@ def sync_all_repositories():
                 
             print(f"\n📋 Syncing repository {i+1}/{len(REPOSITORIES)}: {repo}")
             
-            # Fetch issues from GitHub
-            issues = fetch_github_issues(repo)
-            
-            # Detect and mark closed issues (issues that are no longer in the open list)
-            closed_count = detect_and_mark_closed_issues(repo, issues)
-            
-            # Update database with current open issues
-            updated_count = update_database_with_issues(repo, issues)
-            total_updated += updated_count
-            
-            if closed_count > 0:
-                print(f"  🔒 Marked {closed_count} issues as closed")
+            try:
+                # Fetch only open issues from GitHub
+                issues = fetch_github_issues(repo)
+                
+                # Detect and mark closed issues (issues that are in our DB as 'open' but not in GitHub's current open list)
+                closed_count = detect_and_mark_closed_issues(repo, issues)
+                
+                # Update database with basic issue data only (no PR fetching in Phase 1)
+                updated_count = update_database_with_issues_basic(repo, issues)
+                total_updated += updated_count
+                
+                if closed_count > 0:
+                    print(f"  🔒 Marked {closed_count} issues as closed")
+                    
+                print(f"  ✅ Updated {updated_count} basic issue data for {repo}")
+                
+            except Exception as e:
+                error_msg = f"Error syncing {repo}: {str(e)}"
+                print(f"  ❌ {error_msg}")
+                sync_status['errors'].append(error_msg)
+                continue  # Continue with next repository
             
             # Add delay between repositories to be respectful to GitHub API
             if i < len(REPOSITORIES) - 1:  # Don't delay after the last repo
                 print(f"  ⏱️ Waiting {delay_between_repos} seconds before next repository...")
                 time.sleep(delay_between_repos)
         
+        # PHASE 2: Update PR references and mentions for recent issues
+        print(f"\n🔗 Phase 1 completed! Updated {total_updated} issues across {len(REPOSITORIES)} repositories")
+        
+        # Check if we have enough API quota for Phase 2
+        try:
+            rate_response = requests.get(rate_check_url, headers=get_github_headers(), timeout=5)
+            if rate_response.status_code == 200:
+                rate_data = rate_response.json()
+                remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 0)
+                print(f"📊 API quota after Phase 1: {remaining} requests remaining")
+                
+                if remaining >= 30:  # Only proceed if we have reasonable quota left
+                    pr_mentions_updated = update_pr_references_and_mentions()
+                    print(f"🔗 Phase 2 completed! Updated PR/mentions for {pr_mentions_updated} recent issues")
+                else:
+                    print(f"⚠️ Skipping Phase 2 (PR/mentions) - insufficient API quota ({remaining} requests)")
+            else:
+                print("⚠️ Could not check rate limit for Phase 2 - proceeding with PR/mentions update")
+                pr_mentions_updated = update_pr_references_and_mentions()
+        except Exception as e:
+            print(f"⚠️ Error checking rate limit for Phase 2: {e}")
+            print("📝 Attempting Phase 2 anyway...")
+            pr_mentions_updated = update_pr_references_and_mentions()
+        
         sync_status['last_sync'] = datetime.now(timezone.utc).isoformat()
         sync_status['total_synced'] = total_updated
         
         print(f"\n🎉 Sync completed! Updated {total_updated} issues across {len(REPOSITORIES)} repositories")
+        print("📊 Summary:")
+        print(f"   • Phase 1: Basic issue data for all {len(REPOSITORIES)} repositories")
+        print(f"   • Phase 2: PR references and mentions for recent issues")
+        print(f"   • Total issues updated: {total_updated}")
         
         if sync_status['errors']:
-            print(f"⚠️ Encountered {len(sync_status['errors'])} errors during sync")
+            print(f"⚠️ Encountered {len(sync_status['errors'])} errors during sync:")
             for error in sync_status['errors']:
                 print(f"   • {error}")
+        
+        # Check final rate limit
+        try:
+            rate_response = requests.get(rate_check_url, headers=get_github_headers(), timeout=5)
+            if rate_response.status_code == 200:
+                rate_data = rate_response.json()
+                remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 'unknown')
+                print(f"📊 Final API quota: {remaining} requests remaining")
+        except Exception:
+            pass  # Don't fail sync for rate limit check
         
     except Exception as e:
         print(f"❌ Critical error during sync: {e}")
@@ -835,18 +1179,26 @@ def sync_all_repositories():
     finally:
         sync_status['sync_in_progress'] = False
         
-        # Calculate next sync time (24 hours from now)
-        next_sync = datetime.now(timezone.utc).replace(hour=2, minute=0, second=0, microsecond=0)
-        if next_sync <= datetime.now(timezone.utc):
-            next_sync = next_sync.replace(day=next_sync.day + 1)
-        sync_status['next_sync'] = next_sync.isoformat()
+        # Calculate next sync time (8 AM Pacific tomorrow)
+        now_pacific = datetime.now(PACIFIC_TZ)
+        
+        # Set to 8 AM Pacific today
+        next_sync_pacific = now_pacific.replace(hour=8, minute=0, second=0, microsecond=0)
+        
+        # If 8 AM Pacific today has already passed, move to tomorrow
+        if next_sync_pacific <= now_pacific:
+            next_sync_pacific = next_sync_pacific.replace(day=next_sync_pacific.day + 1)
+        
+        # Convert to UTC for storage
+        next_sync_utc = next_sync_pacific.astimezone(timezone.utc)
+        sync_status['next_sync'] = next_sync_utc.isoformat()
 
 def start_sync_scheduler():
     """Start the background sync scheduler"""
     auth_status = "authenticated" if GITHUB_TOKEN else "unauthenticated"
     rate_limit = "5000 requests/hour" if GITHUB_TOKEN else "60 requests/hour"
     
-    print(f"⏰ Starting sync scheduler (every 24 hours at 2:00 AM UTC)")
+    print(f"⏰ Starting sync scheduler (every 24 hours at 8:00 AM Pacific Time)")
     print(f"🔑 GitHub API access: {auth_status} ({rate_limit})")
     
     # Update database schema if needed
@@ -854,8 +1206,20 @@ def start_sync_scheduler():
     update_database_schema()
     
     try:
-        # Schedule daily sync at 2:00 AM UTC to avoid peak hours
-        schedule.every().day.at("02:00").do(sync_all_repositories)
+        # Calculate 8 AM Pacific Time in UTC for scheduling
+        # Pacific timezone handles PST/PDT automatically
+        
+        # Create a datetime for 8 AM Pacific today
+        today_pacific = datetime.now(PACIFIC_TZ).replace(hour=8, minute=0, second=0, microsecond=0)
+        
+        # Convert to UTC for the scheduler
+        utc_time = today_pacific.astimezone(timezone.utc)
+        schedule_time = utc_time.strftime("%H:%M")
+        
+        print(f"📅 Scheduling sync for 8:00 AM Pacific (currently {schedule_time} UTC)")
+        
+        # Schedule daily sync at the calculated UTC time
+        schedule.every().day.at(schedule_time).do(sync_all_repositories)
         
         # Run initial sync check in a separate thread to avoid blocking import
         def check_and_run_initial_sync():
@@ -1108,6 +1472,154 @@ def _get_issues_from_db_internal(span=None, state_filter='open'):
             span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
         return get_sample_issues()
 
+def get_sync_statistics():
+    """Get comprehensive sync statistics for the dashboard"""
+    try:
+        # Try different database paths for local and Azure environments
+        db_paths = [
+            'github_issues.db',
+            '/home/site/wwwroot/github_issues.db',
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    break
+            except Exception:
+                continue
+        
+        if not conn:
+            return get_default_sync_stats()
+        
+        cursor = conn.cursor()
+        
+        # Get overall statistics
+        cursor.execute('SELECT COUNT(*) FROM issues WHERE state = "open"')
+        total_open_issues = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM issues WHERE state = "closed"')
+        total_closed_issues = cursor.fetchone()[0]
+        
+        # Get last sync information from sync_status
+        last_sync = sync_status.get('last_sync')
+        last_sync_formatted = 'Never'
+        if last_sync:
+            try:
+                last_sync_dt = datetime.fromisoformat(last_sync.replace('Z', '+00:00'))
+                last_sync_formatted = last_sync_dt.strftime('%Y-%m-%d %H:%M UTC')
+            except:
+                last_sync_formatted = 'Unknown'
+        
+        # Get issues created/updated in last 24 hours
+        twenty_four_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        cursor.execute('SELECT COUNT(*) FROM issues WHERE created_at > ? AND state = "open"', (twenty_four_hours_ago,))
+        new_issues_24h = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM issues WHERE updated_at > ? AND state = "open"', (twenty_four_hours_ago,))
+        updated_issues_24h = cursor.fetchone()[0]
+        
+        # Get repository-specific statistics
+        cursor.execute('''
+            SELECT repo, 
+                   COUNT(CASE WHEN state = 'open' THEN 1 END) as open_count,
+                   COUNT(CASE WHEN state = 'closed' THEN 1 END) as closed_count,
+                   COUNT(CASE WHEN created_at > ? AND state = 'open' THEN 1 END) as new_24h,
+                   COUNT(CASE WHEN updated_at > ? AND state = 'open' THEN 1 END) as updated_24h,
+                   MAX(last_fetched) as last_updated
+            FROM issues 
+            GROUP BY repo 
+            ORDER BY open_count DESC
+        ''', (twenty_four_hours_ago, twenty_four_hours_ago))
+        
+        repo_stats = []
+        for row in cursor.fetchall():
+            repo, open_count, closed_count, new_24h, updated_24h, last_updated = row
+            
+            # Format last updated time
+            last_updated_formatted = 'Never'
+            if last_updated:
+                try:
+                    last_updated_dt = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
+                    last_updated_formatted = last_updated_dt.strftime('%Y-%m-%d %H:%M UTC')
+                except:
+                    last_updated_formatted = 'Unknown'
+            
+            repo_stats.append({
+                'repo': repo,
+                'open_count': open_count,
+                'closed_count': closed_count,
+                'new_24h': new_24h,
+                'updated_24h': updated_24h,
+                'last_updated': last_updated_formatted
+            })
+        
+        # Ensure all configured repositories are included, even if they have no issues yet
+        repo_stats_dict = {rs['repo']: rs for rs in repo_stats}
+        for repo in REPOSITORIES:
+            if repo not in repo_stats_dict:
+                repo_stats.append({
+                    'repo': repo,
+                    'open_count': 0,
+                    'closed_count': 0,
+                    'new_24h': 0,
+                    'updated_24h': 0,
+                    'last_updated': 'Never synced'
+                })
+        
+        # Sort by open count descending
+        repo_stats.sort(key=lambda x: x['open_count'], reverse=True)
+        
+        # Get issues with recent PR/mentions processing
+        cursor.execute('SELECT COUNT(*) FROM issues WHERE pr_mentions_last_updated IS NOT NULL')
+        processed_pr_mentions = cursor.fetchone()[0]
+        
+        # Calculate API efficiency stats
+        total_issues = total_open_issues + total_closed_issues
+        pr_processing_percentage = (processed_pr_mentions / total_issues * 100) if total_issues > 0 else 0
+        
+        conn.close()
+        
+        return {
+            'total_open_issues': total_open_issues,
+            'total_closed_issues': total_closed_issues,
+            'total_issues': total_issues,
+            'new_issues_24h': new_issues_24h,
+            'updated_issues_24h': updated_issues_24h,
+            'last_sync': last_sync_formatted,
+            'sync_in_progress': sync_status.get('sync_in_progress', False),
+            'sync_errors': len(sync_status.get('errors', [])),
+            'next_sync': sync_status.get('next_sync'),
+            'repo_stats': repo_stats,
+            'processed_pr_mentions': processed_pr_mentions,
+            'pr_processing_percentage': round(pr_processing_percentage, 1),
+            'repositories_count': len(REPOSITORIES)
+        }
+        
+    except Exception as e:
+        print(f"❌ Error getting sync statistics: {e}")
+        return get_default_sync_stats()
+
+def get_default_sync_stats():
+    """Return default sync stats when database is unavailable"""
+    return {
+        'total_open_issues': 0,
+        'total_closed_issues': 0,
+        'total_issues': 0,
+        'new_issues_24h': 0,
+        'updated_issues_24h': 0,
+        'last_sync': 'Never',
+        'sync_in_progress': False,
+        'sync_errors': 0,
+        'next_sync': None,
+        'repo_stats': [],
+        'processed_pr_mentions': 0,
+        'pr_processing_percentage': 0,
+        'repositories_count': len(REPOSITORIES)
+    }
+
 def get_sample_issues():
     """Return sample issues when database is not available"""
     return [
@@ -1133,6 +1645,25 @@ def get_sample_issues():
             'priority': -1  # Correct default: "Not Set"
         }
     ]
+
+def get_repo_sort_order(repo):
+    """Get sort order for repository (Azure=1, OpenTelemetry=2, Microsoft=3)"""
+    if repo.startswith('Azure/'):
+        return 1
+    elif repo.startswith('open-telemetry/'):
+        return 2
+    elif repo.startswith('microsoft/'):
+        return 3
+    else:
+        return 4
+
+def sort_repositories_by_priority(repos):
+    """Sort repositories by Azure, OpenTelemetry, then Microsoft"""
+    return sorted(repos, key=lambda repo: (get_repo_sort_order(repo), repo.lower()))
+
+def get_all_configured_repositories():
+    """Get all configured repositories, sorted by priority"""
+    return sort_repositories_by_priority(REPOSITORIES)
 
 def group_issues_by_repo(issues):
     """Group issues by repository"""
@@ -1333,7 +1864,7 @@ def format_triage_text(triage):
 def get_repo_category(repo):
     """Determine the category of a repository for color coding"""
     if repo.startswith('open-telemetry/'):
-        return 'opentelemetry'
+        return 'opentelemetry'  # All OpenTelemetry repos use OpenTelemetry theme
     elif repo.startswith('Azure/'):
         return 'azure'
     elif repo.startswith('microsoft/'):
@@ -1345,12 +1876,183 @@ def get_repo_color_class(repo):
     """Get CSS color class based on repository category"""
     category = get_repo_category(repo)
     color_classes = {
-        'opentelemetry': 'otel-theme',     # Orange/Red theme for OpenTelemetry
+        'opentelemetry': 'otel-theme',     # Orange/Red theme for OpenTelemetry (including dotnet)
         'azure': 'azure-theme',           # Blue theme for Azure
-        'microsoft': 'microsoft-theme',   # Green theme for Microsoft
+        'microsoft': 'microsoft-theme',   # Cyan theme for Microsoft
         'other': 'default-theme'          # Gray theme for others
     }
     return color_classes.get(category, 'default-theme')
+
+def get_all_repositories_from_db():
+    """Get list of all repositories that have been synced (even if no current issues)"""
+    try:
+        conn = sqlite3.connect('github_issues.db')
+        cursor = conn.cursor()
+        
+        # Get distinct repositories from the database
+        cursor.execute("SELECT DISTINCT repo FROM issues ORDER BY repo")
+        repos = [row[0] for row in cursor.fetchall()]
+        
+        conn.close()
+        return repos
+    except Exception as e:
+        print(f"❌ Error getting repositories from database: {e}")
+        return []
+
+def generate_empty_repo_section(repo, current_state='open'):
+    """Generate HTML section for a repository with no issues matching current filter"""
+    # Determine language group
+    if repo in ['Azure/azure-sdk-for-python', 'open-telemetry/opentelemetry-python', 'open-telemetry/opentelemetry-python-contrib']:
+        language = 'Python'
+        lang_class = 'python'
+    elif repo in ['Azure/azure-sdk-for-js', 'open-telemetry/opentelemetry-js', 'open-telemetry/opentelemetry-js-contrib', 
+                  'microsoft/ApplicationInsights-node.js', 'microsoft/ApplicationInsights-node.js-native-metrics', 
+                  'microsoft/node-diagnostic-channel']:
+        language = 'Node.js'
+        lang_class = 'nodejs'
+    else:
+        language = 'Browser JavaScript'
+        lang_class = 'browser-js'
+    
+    # Get color theme for this repository
+    color_class = get_repo_color_class(repo)
+    repo_category = get_repo_category(repo)
+    
+    # Add state-specific styling
+    state_class = "closed-issues" if current_state == 'closed' else ""
+    header_style = 'style="background-color: #4a4a4a; color: #e0e0e0;"' if current_state == 'closed' else ""
+    
+    repo_name = repo.split('/')[-1]
+    repo_id = repo.replace('/', '-').replace('.', '-')
+    
+    # Generate appropriate empty message based on state
+    if current_state == 'closed':
+        empty_message = f"""
+        <tr>
+            <td colspan="10" class="text-center py-4">
+                <div class="empty-table-message">
+                    <i class="fas fa-check-circle text-muted" style="font-size: 2rem; margin-bottom: 1rem;"></i>
+                    <h5 class="text-muted">No closed issues found</h5>
+                    <p class="text-muted mb-0">This repository currently has no closed issues in the database.</p>
+                    <button class="btn btn-outline-primary btn-sm mt-2" onclick="toggleIssueState()">
+                        <i class="fas fa-exclamation-circle"></i> View Open Issues
+                    </button>
+                </div>
+            </td>
+        </tr>
+        """
+    elif current_state == 'open':
+        empty_message = f"""
+        <tr>
+            <td colspan="10" class="text-center py-4">
+                <div class="empty-table-message">
+                    <i class="fas fa-inbox text-success" style="font-size: 2rem; margin-bottom: 1rem;"></i>
+                    <h5 class="text-success">No open issues!</h5>
+                    <p class="text-muted mb-0">Great news! This repository has no open issues.</p>
+                    <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleIssueState()">
+                        <i class="fas fa-check-circle"></i> View Closed Issues
+                    </button>
+                </div>
+            </td>
+        </tr>
+        """
+    else:  # 'all'
+        empty_message = f"""
+        <tr>
+            <td colspan="10" class="text-center py-4">
+                <div class="empty-table-message">
+                    <i class="fas fa-database text-muted" style="font-size: 2rem; margin-bottom: 1rem;"></i>
+                    <h5 class="text-muted">No issues found</h5>
+                    <p class="text-muted mb-0">This repository has no issues in the database.</p>
+                    <a href="/sync" class="btn btn-outline-primary btn-sm mt-2">
+                        <i class="fas fa-sync"></i> Sync Data
+                    </a>
+                </div>
+            </td>
+        </tr>
+        """
+    
+    return f"""
+    <div class="repo-section {color_class}" id="repo-{repo_id}" data-language="{lang_class}" data-repo-name="{repo}" data-category="{repo_category}">
+        <div class="repo-header {color_class}" onclick="toggleSection('{repo_id}')">
+            <h2>
+                <a href="https://github.com/{repo}" target="_blank">{repo_name}</a>
+                <span class="category-badge {color_class}">0</span>
+                <span class="category-badge {color_class}">{repo_category.upper()}</span>
+            </h2>
+        </div>
+        <div class="controls d-flex justify-content-between align-items-center">
+            <input type="text" class="form-control search-box" id="search-{repo_id}" 
+                   placeholder="🔍 Search issues..." 
+                   onkeyup="filterTable('{repo_id}', this.value)" style="flex: 1; margin-right: 10px;">
+            <div class="state-controls">
+                <div class="toggle-switch" onclick="toggleIssueState()">
+                    <input type="checkbox" id="state-toggle-{repo_id}" class="toggle-input" 
+                           {'checked' if current_state == 'closed' else ''}>
+                    <label for="state-toggle-{repo_id}" class="toggle-label">
+                        <span class="toggle-text toggle-open">OPEN</span>
+                        <span class="toggle-text toggle-closed">CLOSED</span>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Age Classification Legend (for repository view only) -->
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color recent"></div>
+                <span>0-14 days (Recent)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color medium"></div>
+                <span>15-30 days (Medium)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color old"></div>
+                <span>31-60 days (Old)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color stale"></div>
+                <span>60+ days (Stale)</span>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table class="table table-hover table-striped issues-table {color_class} {state_class}" id="table-{repo_id}">
+                <thead class="table-header {color_class}" {header_style}>
+                    <tr>
+                        <th style="width: 60px;">Edit</th>
+                        <th class="sortable" data-column="title" onclick="sortTable('{repo_id}', 'title')">
+                            Title <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th class="sortable" data-column="assignee" onclick="sortTable('{repo_id}', 'assignee')">
+                            Assignees <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th>Related PRs/Issues</th>
+                        <th>Labels</th>
+                        <th>Mentions</th>
+                        <th class="sortable" data-column="created" onclick="sortTable('{repo_id}', 'created')">
+                            Created <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th class="sortable" data-column="updated" onclick="sortTable('{repo_id}', 'updated')">
+                            Updated <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th class="sortable" data-column="triage" onclick="sortTable('{repo_id}', 'triage')">
+                            Triage <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                        <th class="sortable" data-column="priority" onclick="sortTable('{repo_id}', 'priority')">
+                            Priority <i class="fas fa-sort sort-icon"></i>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {empty_message}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
 
 def generate_repo_section(repo, issues, is_first=False, current_state='open'):
     """Generate HTML section for a repository"""
@@ -1533,6 +2235,27 @@ def generate_repo_section(repo, issues, is_first=False, current_state='open'):
                 </div>
             </div>
         </div>
+        
+        <!-- Age Classification Legend (for repository view only) -->
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color recent"></div>
+                <span>0-14 days (Recent)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color medium"></div>
+                <span>15-30 days (Medium)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color old"></div>
+                <span>31-60 days (Old)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color stale"></div>
+                <span>60+ days (Stale)</span>
+            </div>
+        </div>
+        
         <div class="table-container">
             <table class="table table-hover table-striped issues-table {color_class} {state_class}" id="table-{repo_id}">
                 <thead class="table-header {color_class}" {header_style}>
@@ -1883,16 +2606,18 @@ def _dashboard_internal(span=None):
     
     # Get issues from database
     issues = get_issues_from_db(state_filter=show_state)
-    if not issues:
-        if span:
-            span.set_attribute("dashboard.issues_found", False)
-        return "<h1>No issues found in database. Please run sync first.</h1>"
     
     if span:
-        span.set_attribute("dashboard.issues_found", True)
+        span.set_attribute("dashboard.issues_found", len(issues) > 0)
         span.set_attribute("dashboard.total_issues", len(issues))
     
-    # Group issues by repository
+    # If no issues found, we'll render the template with empty sections
+    # This ensures the UI is always consistent with navigation and toggle
+    if not issues:
+        if span:
+            span.set_attribute("dashboard.empty_state", True)
+    
+    # Group issues by repository (will be empty dict if no issues)
     repo_groups = group_issues_by_repo(issues)
     
     if span:
@@ -1907,20 +2632,38 @@ def _dashboard_internal(span=None):
     nodejs_nav_links = ""
     python_nav_links = ""
     browser_nav_links = ""
+    dotnet_nav_links = ""
+    java_nav_links = ""
     
     nodejs_count = 0
     python_count = 0
     browser_count = 0
+    dotnet_count = 0
+    java_count = 0
     is_first = True
     
+    # Get all configured repositories in sorted order (Azure, OpenTelemetry, Microsoft)
+    all_repositories = get_all_configured_repositories()
+    
+    # Generate repository sections for repos with issues
     for repo, repo_issues in repo_groups.items():
         repo_id = repo.replace('/', '-').replace('.', '-')
-        
         repo_sections += generate_repo_section(repo, repo_issues, is_first, show_state)
-        
-        # Generate navigation link for Bootstrap dropdown with color coding
+        is_first = False
+    
+    # Generate empty sections for repos without issues in current state
+    for repo in all_repositories:
+        if repo not in repo_groups:
+            repo_sections += generate_empty_repo_section(repo, show_state)
+    
+    # Generate navigation links for ALL repositories (sorted by priority)
+    for repo in all_repositories:
+        repo_id = repo.replace('/', '-').replace('.', '-')
         repo_name = repo.split('/')[-1]
-        issue_count = len(repo_issues)
+        
+        # Get issue count for this repo (0 if no issues)
+        issue_count = len(repo_groups.get(repo, []))
+        
         color_class = get_repo_color_class(repo)
         category = get_repo_category(repo)
         
@@ -1939,17 +2682,97 @@ def _dashboard_internal(span=None):
                       'microsoft/node-diagnostic-channel']:
             nodejs_nav_links += nav_link
             nodejs_count += issue_count
+        elif repo in ['Azure/azure-sdk-for-net', 'microsoft/ApplicationInsights-dotnet']:
+            dotnet_nav_links += nav_link
+            dotnet_count += issue_count
+        elif repo in ['open-telemetry/opentelemetry-dotnet']:
+            # OpenTelemetry .NET goes with other OpenTelemetry repos - determine based on primary language
+            # Since it's .NET, it makes sense to group with other .NET repos despite being OpenTelemetry
+            dotnet_nav_links += nav_link  
+            dotnet_count += issue_count
+        elif repo in ['open-telemetry/opentelemetry-java', 'microsoft/ApplicationInsights-Java']:
+            java_nav_links += nav_link
+            java_count += issue_count
         else:
             browser_nav_links += nav_link
             browser_count += issue_count
+    
+    # Handle completely empty state - when no repositories have been synced at all
+    if not all_repositories:
+        # If no repositories at all configured, show the full empty state
+        state_display = show_state.title()
+        empty_state_message = """
+        <div class="empty-state-container">
+            <div class="empty-state-content">
+                <div class="empty-state-icon">
+                    <i class="fas fa-database"></i>
+                </div>
+                <h3>No Issues Found</h3>
+                <p class="text-muted">No repositories configured. Please check the REPOSITORIES configuration.</p>
+                <div class="empty-state-actions">
+                    <a href="/sync" class="btn btn-primary">
+                        <i class="fas fa-sync"></i> Sync Now
+                    </a>
+                    <a href="https://github.com/hectorhdzg/github-issues-dashboard" target="_blank" class="btn btn-outline-secondary">
+                        <i class="fab fa-github"></i> View Project
+                    </a>
+                </div>
+            </div>
+        </div>
+        """
         
-        is_first = False
+        # Add the empty state CSS if it's not already in the template
+        empty_state_css = """
+        <style>
+        .empty-state-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 400px;
+            padding: 2rem;
+            background: white;
+            border-radius: 8px;
+            margin: 2rem auto;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .empty-state-content {
+            text-align: center;
+            max-width: 500px;
+        }
+        
+        .empty-state-icon {
+            font-size: 4rem;
+            color: #6c757d;
+            margin-bottom: 1.5rem;
+        }
+        
+        .empty-state-content h3 {
+            color: #495057;
+            margin-bottom: 1rem;
+        }
+        
+        .empty-state-content p {
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .empty-state-actions .btn {
+            margin: 0 0.5rem;
+        }
+        </style>
+        """
+        
+        repo_sections = empty_state_css + empty_state_message
     
     # Calculate statistics
-    total_repos = len(repo_groups)
+    total_repos = len(all_repositories)  # Count all configured repos, not just those with issues
     total_issues = len(issues)
     recent_issues = sum(1 for issue in issues if (datetime.now(timezone.utc) - datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))).days < 14)
     stale_issues = sum(1 for issue in issues if (datetime.now(timezone.utc) - datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))).days > 60)
+    
+    # Get sync statistics
+    sync_stats = get_sync_statistics()
     
     # Load template and replace all placeholders
     template = load_html_template()
@@ -1957,6 +2780,8 @@ def _dashboard_internal(span=None):
     html = html.replace('{nodejs_nav_links}', nodejs_nav_links)
     html = html.replace('{python_nav_links}', python_nav_links)
     html = html.replace('{browser_nav_links}', browser_nav_links)
+    html = html.replace('{dotnet_nav_links}', dotnet_nav_links)
+    html = html.replace('{java_nav_links}', java_nav_links)
     html = html.replace('{total_repos}', str(total_repos))
     html = html.replace('{total_issues}', str(total_issues))
     html = html.replace('{recent_issues}', str(recent_issues))
@@ -1965,12 +2790,42 @@ def _dashboard_internal(span=None):
     html = html.replace('{selected_repo}', selected_repo)
     html = html.replace('{current_state}', show_state)
     html = html.replace('{state_button_text}', get_state_button_text(show_state))
+    
+    # Add sync statistics replacements
+    html = html.replace('{sync_stats_total_open}', str(sync_stats['total_open_issues']))
+    html = html.replace('{sync_stats_total_closed}', str(sync_stats['total_closed_issues']))
+    html = html.replace('{sync_stats_new_24h}', str(sync_stats['new_issues_24h']))
+    html = html.replace('{sync_stats_updated_24h}', str(sync_stats['updated_issues_24h']))
+    html = html.replace('{sync_stats_last_sync}', sync_stats['last_sync'])
+    html = html.replace('{sync_stats_in_progress}', 'true' if sync_stats['sync_in_progress'] else 'false')
+    html = html.replace('{sync_stats_errors}', str(sync_stats['sync_errors']))
+    html = html.replace('{sync_stats_pr_processed}', str(sync_stats['processed_pr_mentions']))
+    html = html.replace('{sync_stats_pr_percentage}', str(sync_stats['pr_processing_percentage']))
+    
+    # Generate repo stats table for sync section
+    repo_stats_html = ""
+    for repo_stat in sync_stats['repo_stats']:
+        repo_display_name = repo_stat['repo'].split('/')[-1]
+        repo_stats_html += f'''
+        <tr>
+            <td class="repo-name">{repo_display_name}</td>
+            <td><span class="badge badge-success">{repo_stat['open_count']}</span></td>
+            <td><span class="badge badge-secondary">{repo_stat['closed_count']}</span></td>
+            <td><span class="badge badge-info">{repo_stat['new_24h']}</span></td>
+            <td><span class="badge badge-warning">{repo_stat['updated_24h']}</span></td>
+            <td class="text-muted small">{repo_stat['last_updated']}</td>
+        </tr>
+        '''
+    
+    html = html.replace('{sync_repo_stats_table}', repo_stats_html)
     html = html.replace('{group_counts_script}', f'''
     <script>
         // Update navbar badge counts
         document.getElementById('navbar-nodejs-count').textContent = '{nodejs_count}';
         document.getElementById('navbar-python-count').textContent = '{python_count}';
         document.getElementById('navbar-browser-count').textContent = '{browser_count}';
+        document.getElementById('navbar-dotnet-count').textContent = '{dotnet_count}';
+        document.getElementById('navbar-java-count').textContent = '{java_count}';
         
         // Set current state for state toggle functionality
         window.currentState = '{show_state}';
