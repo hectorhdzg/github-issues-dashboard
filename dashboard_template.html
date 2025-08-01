@@ -20,7 +20,7 @@
             line-height: 1.6;
             color: #333;
             background-color: #f8f9fa;
-            padding-top: 76px; /* Account for fixed navbar */
+            padding-top: 120px; /* Account for fixed navbar + data type toggle */
         }
         
         .main-container {
@@ -137,6 +137,45 @@
             opacity: 0.8;
         }
         
+        /* Global Data Type Toggle */
+        .global-data-type-toggle {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            position: fixed;
+            top: 56px; /* Position right below the navbar */
+            left: 0;
+            right: 0;
+            z-index: 1029; /* Below navbar but above content */
+        }
+        
+        .btn-toggle-data-type {
+            background-color: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: rgba(255,255,255,0.9);
+            padding: 8px 16px;
+            margin: 0 2px;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-toggle-data-type:hover {
+            background-color: rgba(255,255,255,0.3);
+            color: white;
+            transform: translateY(-1px);
+        }
+        
+        .btn-toggle-data-type.active {
+            background-color: white;
+            color: #667eea;
+            font-weight: 600;
+            border-color: white;
+        }
+        
+        .btn-toggle-data-type i {
+            margin-right: 6px;
+        }
+        
         .stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -161,6 +200,76 @@
         .stat-label {
             color: #666;
             margin-top: 0.5rem;
+        }
+        
+        /* Sync Statistics Styles */
+        .sync-stats-section {
+            margin: 2rem 0;
+            padding: 1.5rem;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .sync-stats-section h4 {
+            margin-bottom: 1.5rem;
+            color: #333;
+            display: flex;
+            align-items: center;
+        }
+        
+        .sync-stats-section h4 i {
+            margin-right: 0.5rem;
+            color: #667eea;
+        }
+        
+        .sync-stat-card {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 4px solid #667eea;
+        }
+        
+        .sync-stat-number {
+            font-size: 1.8rem;
+            font-weight: bold;
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+        
+        .sync-stat-label {
+            color: #666;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        
+        .sync-info-section {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #28a745;
+        }
+        
+        .sync-info-section p {
+            margin-bottom: 0.5rem;
+        }
+        
+        .repo-stats-table {
+            margin-top: 2rem;
+        }
+        
+        .repo-stats-table h5 {
+            margin-bottom: 1rem;
+            color: #333;
+            display: flex;
+            align-items: center;
+        }
+        
+        .repo-stats-table h5 i {
+            margin-right: 0.5rem;
+            color: #667eea;
         }
         
         .repo-section {
@@ -620,6 +729,52 @@
             font-family: 'Courier New', monospace;
             font-weight: bold;
             color: #667eea;
+        }
+        
+        /* Issue body styling */
+        #modal-issue-body {
+            max-height: 250px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background-color: #f8f9fa;
+            padding: 15px;
+            color: #333;
+        }
+        
+        #modal-issue-body:empty:before {
+            content: "No description provided.";
+            color: #999;
+            font-style: italic;
+        }
+        
+        /* GitHub button and title link styling */
+        .github-btn {
+            border-color: #333;
+            color: #333;
+            transition: all 0.2s ease;
+        }
+        
+        .github-btn:hover {
+            background-color: #333;
+            border-color: #333;
+            color: white;
+        }
+        
+        .issue-title-link {
+            color: #0366d6;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        
+        .issue-title-link:hover {
+            color: #0366d6;
+            text-decoration: underline;
         }
         
         /* Modal context information styling */
@@ -1687,6 +1842,7 @@
                     modalData.number, 
                     modalData.title,
                     modalData.htmlUrl,
+                    modalData.body,
                     modalData.triage,
                     modalData.priority,
                     modalData.comments,
@@ -1702,8 +1858,8 @@
         }
         
         // Function to open issue modal
-        function openIssueModal(repo, number, title, htmlUrl, triage, priority, comments = '', assignees = [], labels = [], mentions = []) {
-            console.log('Opening modal with data:', { repo, number, title, assignees, labels, mentions });
+        function openIssueModal(repo, number, title, htmlUrl, body, triage, priority, comments = '', assignees = [], labels = [], mentions = []) {
+            console.log('Opening modal with data:', { repo, number, title, body, assignees, labels, mentions });
             
             // Store current issue data
             currentModalIssue = {
@@ -1711,6 +1867,7 @@
                 number: number,
                 title: title,
                 htmlUrl: htmlUrl,
+                body: body,
                 triage: triage,
                 priority: priority,
                 comments: comments,
@@ -1723,6 +1880,18 @@
             document.getElementById('modal-issue-number').textContent = '#' + number;
             document.getElementById('modal-github-link').href = htmlUrl;
             document.getElementById('modal-issue-title').textContent = title;
+            
+            // Populate issue body/description
+            const bodyElement = document.getElementById('modal-issue-body');
+            if (body && body.trim()) {
+                bodyElement.textContent = body;
+                bodyElement.style.color = '#333';
+            } else {
+                bodyElement.textContent = 'No description provided.';
+                bodyElement.style.color = '#999';
+                bodyElement.style.fontStyle = 'italic';
+            }
+            
             document.getElementById('modal-triage').checked = triage == 1;
             document.getElementById('modal-priority').value = priority;
             document.getElementById('modal-comments').value = comments || '';
@@ -2033,7 +2202,7 @@
     <nav class="navbar navbar-expand-lg navbar-dark fixed-top navbar-custom">
         <div class="container">
             <a class="navbar-brand" href="#" onclick="clearRepoSelection()">
-                <i class="fas fa-bug"></i> Azure Monitor TelReach GitHub Issues
+                <i class="fas fa-bug"></i> Azure Monitor TelReach GitHub
             </a>
             
             <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
@@ -2096,11 +2265,41 @@
                             {java_nav_links}
                         </div>
                     </li>
+                    
+                    <!-- Others Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="othersDropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <i class="fas fa-ellipsis-h language-icon"></i>Others
+                        </a>
+                        <div class="dropdown-menu" aria-labelledby="othersDropdown">
+                            <a class="dropdown-item" href="/stats">
+                                <i class="fas fa-chart-bar mr-2"></i>Statistics
+                            </a>
+                        </div>
+                    </li>
                 </ul>
                 
             </div>
         </div>
     </nav>
+
+    <!-- Global Data Type Toggle -->
+    <div class="global-data-type-toggle">
+        <div class="container">
+            <div class="row justify-content-center">
+                <div class="col-auto">
+                    <div class="btn-group" role="group" aria-label="Data Type Toggle">
+                        <button type="button" class="btn btn-toggle-data-type" id="issues-toggle" onclick="toggleDataType('issues')">
+                            <i class="fas fa-exclamation-circle"></i> Issues
+                        </button>
+                        <button type="button" class="btn btn-toggle-data-type" id="prs-toggle" onclick="toggleDataType('prs')">
+                            <i class="fas fa-code-branch"></i> Pull Requests
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <div class="main-container">
         <!-- Intro page shown when no repo is selected -->
@@ -2108,29 +2307,11 @@
             <div class="intro-content">
                 <div class="intro-header">
                     <i class="fas fa-bug intro-icon"></i>
-                    <h1>Azure Monitor GitHub Issues Dashboard</h1>
+                    <h1>Azure Monitor TelReach GitHub Dashboard</h1>
                     <p class="intro-subtitle">Track and manage GitHub issues across Azure Monitor scripting SDKs</p>
                 </div>
                 
-                <div class="intro-actions">
-                    <div class="action-section">
-                        <h3>Get Started</h3>
-                        <p>Select a repository from the navigation menu above to view and manage its issues.</p>
-                        <div class="nav-hint">
-                            <i class="fas fa-arrow-up"></i>
-                            <span>Choose from Node.js, Python, or Browser JS repositories</span>
-                        </div>
-                    </div>
-                    
-                    <div class="action-section">
-                        <h3>About This Project</h3>
-                        <p>This dashboard is built to help manage GitHub issues across Azure Monitor scripting SDKs.</p>
-                        <a href="https://github.com/hectorhdzg/github-issues-dashboard" target="_blank" class="github-link">
-                            <i class="fab fa-github"></i>
-                            View on GitHub
-                        </a>
-                    </div>
-                </div>
+                
                 
                 <div class="intro-stats">
                     <h3>Repository Overview</h3>
@@ -2162,78 +2343,16 @@
                     </div>
                 </div>
                 
-                <!-- Sync Statistics Section -->
-                <div class="sync-stats-section mt-4">
-                    <h3><i class="fas fa-sync-alt"></i> Sync Statistics</h3>
+            
+                <div class="intro-actions">
                     
-                    <!-- Overall Stats Grid -->
-                    <div class="stats-grid mb-4">
-                        <div class="stat-item">
-                            <span class="stat-number text-success">{sync_stats_total_open}</span>
-                            <span class="stat-label">Open Issues</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-number text-secondary">{sync_stats_total_closed}</span>
-                            <span class="stat-label">Closed Issues</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-number text-info">{sync_stats_new_24h}</span>
-                            <span class="stat-label">New (24h)</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-number text-warning">{sync_stats_updated_24h}</span>
-                            <span class="stat-label">Updated (24h)</span>
-                        </div>
-                    </div>
-                    
-                    <!-- Sync Status Info -->
-                    <div class="sync-status-info row mb-4">
-                        <div class="col-md-6">
-                            <div class="info-card">
-                                <h5><i class="fas fa-clock"></i> Last Sync</h5>
-                                <p class="sync-time">{sync_stats_last_sync}</p>
-                                <div class="sync-status">
-                                    <span class="status-indicator" id="sync-status-indicator"></span>
-                                    <span id="sync-status-text">Ready</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="info-card">
-                                <h5><i class="fas fa-chart-pie"></i> API Efficiency</h5>
-                                <p>PR/Mentions Processed: <strong>{sync_stats_pr_processed}</strong></p>
-                                <div class="progress">
-                                    <div class="progress-bar bg-info" role="progressbar" 
-                                         style="width: {sync_stats_pr_percentage}%" 
-                                         aria-valuenow="{sync_stats_pr_percentage}" 
-                                         aria-valuemin="0" aria-valuemax="100">
-                                        {sync_stats_pr_percentage}%
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Repository Stats Table -->
-                    <div class="repo-stats-table">
-                        <h5><i class="fas fa-table"></i> Repository Breakdown</h5>
-                        <div class="table-responsive">
-                            <table class="table table-sm table-hover">
-                                <thead class="thead-light">
-                                    <tr>
-                                        <th>Repository</th>
-                                        <th><i class="fas fa-exclamation-circle text-success"></i> Open</th>
-                                        <th><i class="fas fa-check-circle text-secondary"></i> Closed</th>
-                                        <th><i class="fas fa-plus text-info"></i> New (24h)</th>
-                                        <th><i class="fas fa-edit text-warning"></i> Updated (24h)</th>
-                                        <th><i class="fas fa-clock"></i> Last Updated</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {sync_repo_stats_table}
-                                </tbody>
-                            </table>
-                        </div>
+                    <div class="action-section">
+                        <h3>About This Project</h3>
+                        <p>This dashboard is built to help manage GitHub issues across Azure Monitor TelReach SDKs.</p>
+                        <a href="https://github.com/hectorhdzg/github-issues-dashboard" target="_blank" class="github-link">
+                            <i class="fab fa-github"></i>
+                            View on GitHub
+                        </a>
                     </div>
                 </div>
             </div>
@@ -2271,6 +2390,13 @@
                         <div class="mb-4">
                             <label class="font-weight-bold text-muted">Title</label>
                             <h6 id="modal-issue-title" class="mt-1"></h6>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="font-weight-bold text-muted">Description</label>
+                            <div id="modal-issue-body" class="mt-1">
+                                <!-- Issue body will be populated here -->
+                            </div>
                         </div>
                         
                         <!-- Issue Context Information -->
@@ -2382,6 +2508,33 @@
             window.location.href = window.location.pathname + '?' + currentParams.toString();
         }
         
+        function toggleDataType(dataType) {
+            // Get current URL parameters
+            const currentParams = new URLSearchParams(window.location.search);
+            
+            // Set the data type parameter
+            currentParams.set('type', dataType);
+            
+            // Navigate to new URL
+            window.location.href = window.location.pathname + '?' + currentParams.toString();
+        }
+        
+        // Initialize data type toggle buttons based on current state
+        function initializeDataTypeToggle() {
+            const currentParams = new URLSearchParams(window.location.search);
+            const currentDataType = currentParams.get('type') || 'issues';
+            
+            // Update button states
+            document.querySelectorAll('.btn-toggle-data-type').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            const activeButton = document.getElementById(currentDataType + '-toggle');
+            if (activeButton) {
+                activeButton.classList.add('active');
+            }
+        }
+        
         // Add some debug info on page load
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Page loaded');
@@ -2391,6 +2544,9 @@
             toggles.forEach((toggle, index) => {
                 console.log(`Toggle ${index}:`, toggle);
             });
+            
+            // Initialize data type toggle
+            initializeDataTypeToggle();
         });
     </script>
     

@@ -16,8 +16,15 @@ from flask import Flask, render_template_string, jsonify, request, session, redi
 import sqlite3
 import json
 from datetime import datetime, timezone, timedelta
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 import uuid
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not available, continue without it
 
 # Import timezone support with fallback
 try:
@@ -81,6 +88,12 @@ if connection_string:
             unit="1"
         )
         
+        pr_counter = meter.create_counter(
+            name="github_prs_processed",
+            description="Number of GitHub pull requests processed",
+            unit="1"
+        )
+        
         repo_counter = meter.create_counter(
             name="repository_sections_rendered",
             description="Number of repository sections rendered",
@@ -110,6 +123,7 @@ if connection_string:
         tracer = None
         meter = None
         issue_counter = None
+        pr_counter = None
         repo_counter = None
 else:
     print("⚠️ APPLICATIONINSIGHTS_CONNECTION_STRING not found, OpenTelemetry disabled")
@@ -117,6 +131,7 @@ else:
     tracer = None
     meter = None
     issue_counter = None
+    pr_counter = None
     repo_counter = None
 
 app = Flask(__name__)
@@ -344,45 +359,6 @@ def extract_mentioned_handles(issue_body, pr_references_text=''):
     
     return json.dumps(sorted(list(set(filtered_handles))))
 
-def fetch_pr_content_for_mentions(repo, pr_number, headers):
-    """Fetch PR content to extract mentions (with rate limiting consideration)"""
-    try:
-        # Check rate limit before making request
-        rate_check_url = f"{GITHUB_API_BASE}/rate_limit"
-        rate_response = requests.get(rate_check_url, headers=headers, timeout=5)
-        
-        if rate_response.status_code == 200:
-            rate_data = rate_response.json()
-            remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 0)
-            
-            # Skip if we're running low on API quota (less than 10 requests left)
-            if remaining < 10:
-                print(f"  ⚠️ Skipping PR #{pr_number} content - low API quota ({remaining} requests left)")
-                return ''
-        
-        pr_url = f"{GITHUB_API_BASE}/repos/{repo}/pulls/{pr_number}"
-        response = requests.get(pr_url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            pr_data = response.json()
-            return pr_data.get('body', '')
-        elif response.status_code == 404:
-            # PR might not exist, could be an issue reference
-            issue_url = f"{GITHUB_API_BASE}/repos/{repo}/issues/{pr_number}"
-            response = requests.get(issue_url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                issue_data = response.json()
-                return issue_data.get('body', '')
-        elif response.status_code == 403:
-            # Rate limit hit
-            print(f"  ⚠️ Rate limit hit while fetching PR #{pr_number}")
-            return ''
-            
-    except Exception as e:
-        print(f"  ⚠️ Could not fetch PR/issue #{pr_number}: {e}")
-    
-    return ''
-
 def update_database_schema():
     """Update database schema to add new columns if they don't exist"""
     try:
@@ -418,12 +394,6 @@ def update_database_schema():
             cursor.execute("ALTER TABLE issues ADD COLUMN labels TEXT DEFAULT '[]'")
             print("✅ Added 'labels' column")
         
-        # Add mentioned_handles column if it doesn't exist
-        if 'mentioned_handles' not in columns:
-            print("📋 Adding 'mentioned_handles' column to issues table...")
-            cursor.execute("ALTER TABLE issues ADD COLUMN mentioned_handles TEXT DEFAULT '[]'")
-            print("✅ Added 'mentioned_handles' column")
-        
         # Add assignees column if it doesn't exist (JSON array for multiple assignees)
         if 'assignees' not in columns:
             print("📋 Adding 'assignees' column to issues table...")
@@ -458,11 +428,100 @@ def update_database_schema():
                 updated_rows = cursor.rowcount
                 print(f"🔧 Fixed {updated_rows} issues with incorrect default priority (2 -> -1)")
         
+        # Check if Phase 2 columns exist and recreate table without them if needed
+        phase2_columns = ['mentioned_handles', 'pr_references', 'pr_mentions_last_updated']
+        has_phase2_columns = any(col in columns for col in phase2_columns)
+        
+        if has_phase2_columns:
+            print("📋 Removing Phase 2 columns (mentioned_handles, pr_references, pr_mentions_last_updated)...")
+            
+            # Create new table without Phase 2 columns
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS issues_new (
+                    repo TEXT NOT NULL,
+                    number INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    html_url TEXT NOT NULL,
+                    assignee_login TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    body TEXT,
+                    state TEXT NOT NULL,
+                    last_fetched TEXT,
+                    labels TEXT DEFAULT '[]',
+                    assignees TEXT DEFAULT '[]',
+                    comments TEXT DEFAULT '',
+                    triage INTEGER DEFAULT 0,
+                    priority INTEGER DEFAULT -1,
+                    PRIMARY KEY (repo, number)
+                )
+            ''')
+            
+            # Copy data from old table to new table (excluding Phase 2 columns)
+            cursor.execute('''
+                INSERT INTO issues_new (
+                    repo, number, title, html_url, assignee_login, 
+                    created_at, updated_at, body, state, last_fetched,
+                    labels, assignees, comments, triage, priority
+                )
+                SELECT 
+                    repo, number, title, html_url, assignee_login,
+                    created_at, updated_at, body, state, last_fetched,
+                    COALESCE(labels, '[]'),
+                    COALESCE(assignees, '[]'),
+                    COALESCE(comments, ''),
+                    COALESCE(triage, 0),
+                    COALESCE(priority, -1)
+                FROM issues
+            ''')
+            
+            # Replace old table with new table
+            cursor.execute('DROP TABLE issues')
+            cursor.execute('ALTER TABLE issues_new RENAME TO issues')
+            print("✅ Successfully removed Phase 2 columns and cleaned up database schema")
+        
+        # Add mentioned_handles column if it doesn't exist
+        if 'mentioned_handles' not in columns:
+            print("📋 Adding 'mentioned_handles' column to issues table...")
+            cursor.execute("ALTER TABLE issues ADD COLUMN mentioned_handles TEXT DEFAULT '[]'")
+            print("✅ Added 'mentioned_handles' column")
+        
         # Add pr_mentions_last_updated column if it doesn't exist (to track Phase 2 execution)
         if 'pr_mentions_last_updated' not in columns:
             print("📋 Adding 'pr_mentions_last_updated' column to issues table...")
             cursor.execute("ALTER TABLE issues ADD COLUMN pr_mentions_last_updated TEXT DEFAULT NULL")
             print("✅ Added 'pr_mentions_last_updated' column")
+        
+        # Create pull_requests table if it doesn't exist
+        # Drop existing table if it has wrong schema (with triage/priority)
+        cursor.execute('DROP TABLE IF EXISTS pull_requests')
+        
+        cursor.execute('''
+            CREATE TABLE pull_requests (
+                repo TEXT NOT NULL,
+                number INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                html_url TEXT NOT NULL,
+                user_login TEXT NOT NULL,
+                user_avatar_url TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                body TEXT,
+                state TEXT NOT NULL,
+                draft BOOLEAN DEFAULT FALSE,
+                merged BOOLEAN DEFAULT FALSE,
+                mergeable_state TEXT,
+                base_ref TEXT,
+                head_ref TEXT,
+                last_fetched TEXT,
+                labels TEXT DEFAULT '[]',
+                assignees TEXT DEFAULT '[]',
+                requested_reviewers TEXT DEFAULT '[]',
+                comments TEXT DEFAULT '',
+                PRIMARY KEY (repo, number)
+            )
+        ''')
+        print("📋 Created/verified pull_requests table")
         
         conn.commit()
         conn.close()
@@ -471,6 +530,306 @@ def update_database_schema():
     except Exception as e:
         print(f"❌ Error updating database schema: {e}")
         return False
+
+def fetch_github_pull_requests(repo, per_page=100):
+    """
+    Fetch pull requests from a GitHub repository.
+    
+    For Azure repos: Filters by monitoring labels and fetches PRs for each label.
+    For other repos: Fetches all PRs.
+    
+    Returns: List of pull requests from GitHub API
+    """
+    print(f"🔄 Fetching pull requests from {repo}...")
+    
+    # Check rate limit status before starting
+    if not GITHUB_TOKEN:
+        print(f"📡 Using unauthenticated GitHub API for {repo} (60 requests/hour limit)")
+    else:
+        print(f"🔑 Using authenticated GitHub API for {repo} (5000 requests/hour limit)")
+    
+    # Define Azure monitoring labels for filtering (same as issues)
+    azure_monitor_labels = [
+        "Monitor - Distro",
+        "Monitor - Exporter", 
+        "Monitor - ApplicationInsights"
+    ]
+    
+    # Add LiveMetrics label specifically for .NET repositories
+    dotnet_labels = azure_monitor_labels + ["Monitor - LiveMetrics"]
+    
+    all_prs = []
+    seen_pr_numbers = set()  # Track duplicates when fetching by label
+    
+    # Determine which labels to use based on repository type (same logic as issues)
+    labels_to_use = []
+    if repo.startswith('Azure/'):
+        if 'dotnet' in repo.lower() or repo == 'Azure/azure-sdk-for-net':
+            labels_to_use = dotnet_labels  # Use Azure + LiveMetrics labels for .NET
+        else:
+            labels_to_use = azure_monitor_labels  # Use standard Azure labels
+    elif 'ApplicationInsights' in repo:
+        # All ApplicationInsights repos don't use Azure monitor labels, fetch all PRs
+        labels_to_use = []
+    elif repo.startswith('microsoft/') and any(azure_term in repo for azure_term in ['azure']):
+        labels_to_use = azure_monitor_labels  # Use Azure labels for other Microsoft Azure-related repos
+    
+    try:
+        headers = get_github_headers()
+        
+        # For repos with specific label filtering, fetch PRs by each monitoring label separately
+        if labels_to_use:
+            repo_type = 'Azure' if repo.startswith('Azure/') else 'Microsoft Azure-related'
+            print(f"  🏷️ Filtering {repo_type} repo '{repo}' for monitoring labels: {', '.join(labels_to_use)}")
+            
+            # Fetch all PRs (open, closed, merged) for each label
+            states = ['open', 'closed']
+            
+            for label in labels_to_use:
+                for state in states:
+                    print(f"  📝 Fetching {state} pull requests with label '{label}'...")
+                    
+                    page = 1
+                    max_pages = 2 if not GITHUB_TOKEN else 3  # Conservative for Azure repos with filtering
+                    
+                    while page <= max_pages:
+                        # Use issues endpoint with label filter to get PRs (GitHub API quirk)
+                        issues_url = f"{GITHUB_API_BASE}/repos/{repo}/issues"
+                        params = {
+                            'state': state,
+                            'per_page': per_page,
+                            'page': page,
+                            'sort': 'updated',
+                            'direction': 'desc',
+                            'labels': label
+                        }
+                        
+                        print(f"    🌐 Requesting labeled PRs: {issues_url} (page {page}, state: {state}, label: {label})")
+                        
+                        response = requests.get(issues_url, headers=headers, params=params, timeout=30)
+                        
+                        if response.status_code == 200:
+                            issues = response.json()
+                            
+                            if not issues:  # No more issues/PRs for this label
+                                print(f"    ✅ No more {state} items found for label '{label}' (page {page})")
+                                break
+                            
+                            # Filter to only get pull requests from the issues endpoint
+                            prs_in_page = [item for item in issues if 'pull_request' in item and item['number'] not in seen_pr_numbers]
+                            
+                            for pr in prs_in_page:
+                                all_prs.append(pr)
+                                seen_pr_numbers.add(pr['number'])
+                            
+                            print(f"    ✅ Found {len(issues)} items, {len(prs_in_page)} PRs with label '{label}' on page {page}")
+                            
+                            # Check if we got fewer results than requested (last page)
+                            if len(issues) < per_page:
+                                print(f"    ✅ Reached last page for label '{label}' {state} PRs (page {page})")
+                                break
+                            
+                            page += 1
+                            
+                            # Small delay to be respectful
+                            time.sleep(0.1)
+                            
+                        elif response.status_code == 403:
+                            print(f"    ⚠️ Rate limit hit for {repo} PRs with label '{label}'")
+                            break
+                        elif response.status_code == 404:
+                            print(f"    ❌ Repository {repo} not found or not accessible")
+                            return []
+                        else:
+                            print(f"    ❌ Error fetching PRs with label '{label}': HTTP {response.status_code}")
+                            break
+        
+        else:
+            # For non-Azure repos, fetch all PRs without label filtering
+            print(f"  📝 Fetching all pull requests (no label filtering)")
+            
+            states = ['open', 'closed']
+            
+            for state in states:
+                print(f"  📝 Fetching {state} pull requests...")
+                
+                # Start with first page
+                page = 1
+                max_pages = 3  # Limit to avoid excessive API usage
+                
+                while page <= max_pages:
+                    pr_url = f"{GITHUB_API_BASE}/repos/{repo}/pulls"
+                    params = {
+                        'state': state,
+                        'per_page': per_page,
+                        'page': page,
+                        'sort': 'updated',
+                        'direction': 'desc'
+                    }
+                    
+                    print(f"    🌐 Requesting: {pr_url} (page {page}, state: {state})")
+                    
+                    response = requests.get(pr_url, headers=headers, params=params, timeout=30)
+                    
+                    if response.status_code == 200:
+                        prs = response.json()
+                        
+                        if not prs:  # No more PRs
+                            print(f"    ✅ No more {state} PRs found (page {page})")
+                            break
+                        
+                        print(f"    ✅ Found {len(prs)} {state} PRs on page {page}")
+                        all_prs.extend(prs)
+                        
+                        # Check if we got fewer results than requested (last page)
+                        if len(prs) < per_page:
+                            print(f"    ✅ Reached last page for {state} PRs (page {page})")
+                            break
+                        
+                        page += 1
+                        
+                        # Small delay to be respectful
+                        time.sleep(0.1)
+                        
+                    elif response.status_code == 403:
+                        print(f"    ⚠️ Rate limit hit for {repo} PRs")
+                        # Check if we have some PRs to return
+                        if all_prs:
+                            print(f"    📊 Returning {len(all_prs)} PRs collected before rate limit")
+                            break
+                        return []
+                        
+                    elif response.status_code == 404:
+                        print(f"    ❌ Repository {repo} not found or not accessible")
+                        return []
+                        
+                    else:
+                        print(f"    ❌ Error fetching PRs: HTTP {response.status_code}")
+                        print(f"    📝 Response: {response.text[:200]}...")
+                        return []
+    
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Request error fetching PRs from {repo}: {e}")
+        return []
+    except Exception as e:
+        print(f"❌ Unexpected error fetching PRs from {repo}: {e}")
+        return []
+    
+    print(f"📊 Successfully fetched {len(all_prs)} total pull requests from {repo}")
+    return all_prs
+
+def update_database_with_pull_requests(repo, pull_requests):
+    """Update database with pull request data"""
+    try:
+        # Try different database paths for local and Azure environments
+        db_paths = [
+            'github_issues.db',
+            '/home/site/wwwroot/github_issues.db',
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    break
+            except Exception:
+                continue
+        
+        if not conn:
+            print(f"❌ Could not connect to database for PR updates in {repo}")
+            return 0
+        
+        cursor = conn.cursor()
+        updated_count = 0
+        last_fetched = datetime.now(timezone.utc).isoformat()
+        
+        for pr in pull_requests:
+            try:
+                # Extract basic PR information
+                number = pr['number']
+                title = pr['title']
+                html_url = pr['html_url']
+                user_login = pr['user']['login'] if pr.get('user') else None
+                user_avatar_url = pr['user']['avatar_url'] if pr.get('user') else None
+                created_at = pr['created_at']
+                updated_at = pr['updated_at']
+                body = pr.get('body', '') or ''
+                state = pr['state']
+                draft = pr.get('draft', False)
+                merged = pr.get('merged', False)
+                mergeable_state = pr.get('mergeable_state', '')
+                
+                # Extract base and head refs
+                base_ref = pr.get('base', {}).get('ref', '') if pr.get('base') else ''
+                head_ref = pr.get('head', {}).get('ref', '') if pr.get('head') else ''
+                
+                # Extract labels with colors
+                labels_json = extract_labels_with_colors(pr)
+                
+                # Extract assignees
+                assignees_json = extract_assignees_with_info(pr)
+                
+                # Extract requested reviewers
+                requested_reviewers = []
+                if pr.get('requested_reviewers'):
+                    for reviewer in pr['requested_reviewers']:
+                        requested_reviewers.append({
+                            'login': reviewer.get('login', ''),
+                            'avatar_url': reviewer.get('avatar_url', ''),
+                            'html_url': reviewer.get('html_url', '')
+                        })
+                requested_reviewers_json = json.dumps(requested_reviewers)
+                
+                # Insert or update PR (preserve custom user data)
+                cursor.execute('''
+                    UPDATE pull_requests SET 
+                        title = ?, html_url = ?, user_login = ?, user_avatar_url = ?,
+                        created_at = ?, updated_at = ?, body = ?, state = ?, draft = ?, merged = ?,
+                        mergeable_state = ?, base_ref = ?, head_ref = ?, last_fetched = ?,
+                        labels = ?, assignees = ?, requested_reviewers = ?
+                    WHERE repo = ? AND number = ?
+                ''', (
+                    title, html_url, user_login, user_avatar_url,
+                    created_at, updated_at, body, state, draft, merged,
+                    mergeable_state, base_ref, head_ref, last_fetched,
+                    labels_json, assignees_json, requested_reviewers_json,
+                    repo, number
+                ))
+                
+                # If no rows were updated, insert new record
+                if cursor.rowcount == 0:
+                    cursor.execute('''
+                        INSERT INTO pull_requests (
+                            repo, number, title, html_url, user_login, user_avatar_url,
+                            created_at, updated_at, body, state, draft, merged,
+                            mergeable_state, base_ref, head_ref, last_fetched,
+                            labels, assignees, requested_reviewers, comments
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        repo, number, title, html_url, user_login, user_avatar_url,
+                        created_at, updated_at, body, state, draft, merged,
+                        mergeable_state, base_ref, head_ref, last_fetched,
+                        labels_json, assignees_json, requested_reviewers_json,
+                        ''  # Default value for comments
+                    ))
+                
+                updated_count += 1
+                
+            except Exception as e:
+                print(f"❌ Error processing PR #{pr.get('number', 'unknown')}: {e}")
+                continue
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Successfully updated {updated_count} pull requests for {repo}")
+        return updated_count
+        
+    except Exception as e:
+        print(f"❌ Error updating database with PRs for {repo}: {e}")
+        return 0
 
 def fetch_github_issues(repo, per_page=100):
     """
@@ -509,9 +868,10 @@ def fetch_github_issues(repo, per_page=100):
             labels_to_use = dotnet_labels  # Use Azure + LiveMetrics labels for .NET
         else:
             labels_to_use = azure_monitor_labels  # Use standard Azure labels
-    elif repo == 'microsoft/ApplicationInsights-dotnet':
-        labels_to_use = dotnet_labels  # Use Azure + LiveMetrics labels for .NET ApplicationInsights
-    elif repo.startswith('microsoft/') and any(azure_term in repo for azure_term in ['ApplicationInsights', 'azure']):
+    elif 'ApplicationInsights' in repo:
+        # All ApplicationInsights repos don't use Azure monitor labels, fetch all issues
+        labels_to_use = []
+    elif repo.startswith('microsoft/') and any(azure_term in repo for azure_term in ['azure']):
         labels_to_use = azure_monitor_labels  # Use Azure labels for other Microsoft Azure-related repos
     
     # For repos with specific label filtering, fetch issues by each monitoring label separately
@@ -556,8 +916,12 @@ def fetch_github_issues(repo, per_page=100):
                     
                     page += 1
                     
-                    # Limit pages for rate limiting
-                    max_pages = 1 if not GITHUB_TOKEN else 2
+                    # Limit pages for rate limiting - increased for Azure repos to get more complete data
+                    if repo.startswith('Azure/'):
+                        max_pages = 3 if not GITHUB_TOKEN else 5  # Allow more pages for Azure repos
+                    else:
+                        max_pages = 1 if not GITHUB_TOKEN else 2  # Conservative for other repos
+                    
                     if page > max_pages:
                         print(f"  ⚠️ Reached page limit ({max_pages}) for label '{label}' in {repo}")
                         break
@@ -706,7 +1070,7 @@ def update_database_with_issues_basic(repo, issues):
                 # Extract assignees with info (new feature for multiple assignees)
                 assignees_json = extract_assignees_with_info(issue)
                 
-                # Basic mentions extraction (from issue body only, no PR content)
+                # Basic mentions extraction (from issue body only, no PR content - Phase 2 DISABLED)
                 mentioned_handles_json = extract_mentioned_handles(body, '')
                 
                 # Insert or update issue (preserve custom user data)
@@ -754,177 +1118,6 @@ def update_database_with_issues_basic(repo, issues):
     except Exception as e:
         print(f"❌ Database error for {repo}: {e}")
         sync_status['errors'].append(f"Database error for {repo}: {str(e)}")
-        return 0
-
-def update_pr_references_and_mentions():
-    """
-    Phase 2: Update PR references and mentions for issues that need updates.
-    This runs after all basic issue data has been fetched to ensure we have the latest issues first.
-    
-    Optimized to only process issues that:
-    1. Are recent (created within last 30 days) OR
-    2. Have been updated since their last PR/mentions processing OR
-    3. Have never had PR/mentions processing done
-    """
-    print("\n🔗 Phase 2: Updating PR references and mentions for eligible issues...")
-    
-    try:
-        # Check rate limit before starting phase 2
-        rate_check_url = f"{GITHUB_API_BASE}/rate_limit"
-        rate_response = requests.get(rate_check_url, headers=get_github_headers(), timeout=5)
-        
-        if rate_response.status_code == 200:
-            rate_data = rate_response.json()
-            remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 'unknown')
-            print(f"📊 API quota before PR/mentions phase: {remaining} requests remaining")
-            
-            if isinstance(remaining, int) and remaining < 50:
-                print(f"⚠️ Low API quota ({remaining} requests) - skipping PR/mentions phase to preserve quota")
-                return 0
-        
-        # Connect to database
-        db_paths = [
-            'github_issues.db',
-            '/home/site/wwwroot/github_issues.db',
-            os.path.join(os.path.dirname(__file__), 'github_issues.db')
-        ]
-        
-        conn = None
-        for db_path in db_paths:
-            try:
-                if os.path.exists(db_path):
-                    conn = sqlite3.connect(db_path)
-                    break
-            except Exception:
-                continue
-        
-        if not conn:
-            print("❌ Could not connect to database for PR/mentions phase")
-            return 0
-        
-        cursor = conn.cursor()
-        
-        # Get issues that need PR/mentions updates based on multiple criteria
-        thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        current_time = datetime.now(timezone.utc).isoformat()
-        
-        # Smart query to find issues that need PR/mentions updates:
-        # 1. Recent issues (created within 30 days)
-        # 2. Issues where updated_at > pr_mentions_last_updated (issue was updated since last PR processing)
-        # 3. Issues where pr_mentions_last_updated is NULL (never processed)
-        cursor.execute('''
-            SELECT repo, number, body, created_at, updated_at, pr_mentions_last_updated
-            FROM issues 
-            WHERE state = 'open' 
-            AND (
-                created_at > ?  -- Recent issues (within 30 days)
-                OR pr_mentions_last_updated IS NULL  -- Never processed for PR/mentions
-                OR updated_at > pr_mentions_last_updated  -- Updated since last PR processing
-            )
-            ORDER BY 
-                CASE WHEN pr_mentions_last_updated IS NULL THEN 0 ELSE 1 END,  -- Prioritize never-processed
-                updated_at DESC  -- Then by most recently updated
-            LIMIT 150
-        ''', (thirty_days_ago,))
-        
-        eligible_issues = cursor.fetchall()
-        updated_count = 0
-        skipped_count = 0
-        
-        print(f"🔍 Found {len(eligible_issues)} issues eligible for PR/mentions processing")
-        
-        # Categorize issues for better logging
-        recent_issues = 0
-        never_processed = 0
-        updated_since_last_processing = 0
-        
-        for repo, number, body, created_at, updated_at, pr_mentions_last_updated in eligible_issues:
-            try:
-                # Categorize this issue for logging
-                issue_created = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                days_old = (datetime.now(timezone.utc) - issue_created).days
-                
-                if pr_mentions_last_updated is None:
-                    never_processed += 1
-                    reason = "never processed"
-                elif days_old <= 30:
-                    recent_issues += 1
-                    reason = f"recent ({days_old} days old)"
-                else:
-                    updated_since_last_processing += 1
-                    reason = "updated since last processing"
-                
-                # Check rate limit for each batch
-                if updated_count > 0 and updated_count % 20 == 0:
-                    rate_response = requests.get(rate_check_url, headers=get_github_headers(), timeout=5)
-                    if rate_response.status_code == 200:
-                        rate_data = rate_response.json()
-                        remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 0)
-                        if remaining < 10:
-                            print(f"⚠️ API quota low ({remaining}) - stopping PR/mentions phase")
-                            break
-                
-                pr_content = ''
-                
-                # Only fetch PR content for recent issues or those never processed
-                # Skip PR fetching for older issues that were just updated (to save API calls)
-                should_fetch_pr_content = (days_old <= 30) or (pr_mentions_last_updated is None)
-                
-                if should_fetch_pr_content:
-                    # Extract PR references for additional mention context
-                    pr_references = extract_pr_references(body, repo)
-                    
-                    # Limit to avoid rate limiting - only first 1 PR
-                    if pr_references and len(pr_references) <= 1:
-                        for pr_ref in pr_references[:1]:
-                            if pr_ref.get('is_same_repo', False):
-                                pr_num = pr_ref.get('number')
-                                if pr_num:
-                                    try:
-                                        pr_body = fetch_pr_content_for_mentions(repo, pr_num, get_github_headers())
-                                        pr_content += ' ' + pr_body
-                                        print(f"  📝 Fetched PR #{pr_num} content for {repo}#{number} ({reason})")
-                                    except Exception as e:
-                                        print(f"  ⚠️ Skipping PR #{pr_num} for {repo}#{number}: {e}")
-                else:
-                    skipped_count += 1
-                    print(f"  ⏭️ Skipped PR fetching for {repo}#{number} (older issue, {reason})")
-                
-                # Extract mentioned GitHub handles (from issue body and any fetched PR content)
-                mentioned_handles_json = extract_mentioned_handles(body, pr_content)
-                
-                # Update mentioned_handles and mark as processed
-                cursor.execute('''
-                    UPDATE issues SET 
-                        mentioned_handles = ?, 
-                        pr_mentions_last_updated = ?
-                    WHERE repo = ? AND number = ?
-                ''', (mentioned_handles_json, current_time, repo, number))
-                
-                if cursor.rowcount > 0:
-                    updated_count += 1
-                
-                # Small delay to be respectful
-                time.sleep(0.3)
-                
-            except Exception as e:
-                print(f"  ❌ Error updating PR/mentions for {repo}#{number}: {e}")
-                continue
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"✅ Updated PR references and mentions for {updated_count} issues")
-        print(f"📊 Phase 2 breakdown:")
-        print(f"   • Recent issues (≤30 days): {recent_issues}")
-        print(f"   • Never processed: {never_processed}")
-        print(f"   • Updated since last processing: {updated_since_last_processing}")
-        print(f"   • Skipped PR fetching (optimization): {skipped_count}")
-        
-        return updated_count
-        
-    except Exception as e:
-        print(f"❌ Error in PR/mentions phase: {e}")
         return 0
 
 def detect_and_mark_closed_issues(repo, current_open_issues):
@@ -1113,6 +1306,15 @@ def sync_all_repositories():
                     
                 print(f"  ✅ Updated {updated_count} basic issue data for {repo}")
                 
+                # Also fetch and update pull requests
+                try:
+                    pull_requests = fetch_github_pull_requests(repo)
+                    pr_updated_count = update_database_with_pull_requests(repo, pull_requests)
+                    print(f"  🔀 Updated {pr_updated_count} pull requests for {repo}")
+                except Exception as pr_error:
+                    print(f"  ⚠️ Warning: Could not sync pull requests for {repo}: {pr_error}")
+                    # Don't fail the entire sync for PR errors
+                
             except Exception as e:
                 error_msg = f"Error syncing {repo}: {str(e)}"
                 print(f"  ❌ {error_msg}")
@@ -1124,37 +1326,13 @@ def sync_all_repositories():
                 print(f"  ⏱️ Waiting {delay_between_repos} seconds before next repository...")
                 time.sleep(delay_between_repos)
         
-        # PHASE 2: Update PR references and mentions for recent issues
-        print(f"\n🔗 Phase 1 completed! Updated {total_updated} issues across {len(REPOSITORIES)} repositories")
-        
-        # Check if we have enough API quota for Phase 2
-        try:
-            rate_response = requests.get(rate_check_url, headers=get_github_headers(), timeout=5)
-            if rate_response.status_code == 200:
-                rate_data = rate_response.json()
-                remaining = rate_data.get('resources', {}).get('core', {}).get('remaining', 0)
-                print(f"📊 API quota after Phase 1: {remaining} requests remaining")
-                
-                if remaining >= 30:  # Only proceed if we have reasonable quota left
-                    pr_mentions_updated = update_pr_references_and_mentions()
-                    print(f"🔗 Phase 2 completed! Updated PR/mentions for {pr_mentions_updated} recent issues")
-                else:
-                    print(f"⚠️ Skipping Phase 2 (PR/mentions) - insufficient API quota ({remaining} requests)")
-            else:
-                print("⚠️ Could not check rate limit for Phase 2 - proceeding with PR/mentions update")
-                pr_mentions_updated = update_pr_references_and_mentions()
-        except Exception as e:
-            print(f"⚠️ Error checking rate limit for Phase 2: {e}")
-            print("📝 Attempting Phase 2 anyway...")
-            pr_mentions_updated = update_pr_references_and_mentions()
-        
         sync_status['last_sync'] = datetime.now(timezone.utc).isoformat()
         sync_status['total_synced'] = total_updated
         
         print(f"\n🎉 Sync completed! Updated {total_updated} issues across {len(REPOSITORIES)} repositories")
         print("📊 Summary:")
-        print(f"   • Phase 1: Basic issue data for all {len(REPOSITORIES)} repositories")
-        print(f"   • Phase 2: PR references and mentions for recent issues")
+        print(f"   • Basic issue data for all {len(REPOSITORIES)} repositories")
+        print(f"   • Pull requests data for all {len(REPOSITORIES)} repositories")
         print(f"   • Total issues updated: {total_updated}")
         
         if sync_status['errors']:
@@ -1472,6 +1650,179 @@ def _get_issues_from_db_internal(span=None, state_filter='open'):
             span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
         return get_sample_issues()
 
+def get_pull_requests_from_db(state_filter='open'):
+    """Get pull requests from database with optional state filtering"""
+    # Create a custom span for database operations
+    if tracer:
+        with tracer.start_as_current_span("get_pull_requests_from_db") as span:
+            return _get_pull_requests_from_db_internal(span, state_filter)
+    else:
+        return _get_pull_requests_from_db_internal(None, state_filter)
+
+def _get_pull_requests_from_db_internal(span=None, state_filter='open'):
+    """Internal function to get pull requests from database with telemetry"""
+    try:
+        if span:
+            span.set_attribute("operation.type", "database_read")
+            span.set_attribute("database.name", "github_issues.db")
+        
+        # Try different database paths for local and Azure environments
+        db_paths = [
+            'github_issues.db',
+            '/home/site/wwwroot/github_issues.db',
+            os.path.join(os.path.dirname(__file__), 'github_issues.db')
+        ]
+        
+        conn = None
+        for db_path in db_paths:
+            try:
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    break
+            except Exception:
+                continue
+        
+        if conn is None:
+            print("❌ Could not connect to database for pull requests")
+            return get_sample_pull_requests()
+        
+        # SQLite operations are automatically instrumented by Azure Monitor
+        cursor = conn.cursor()
+        
+        # Build the query based on state filter
+        if state_filter == 'all':
+            cursor.execute('''
+                SELECT repo, number, title, html_url, user_login, user_avatar_url, created_at, updated_at, body, 
+                       state, draft, merged, mergeable_state, base_ref, head_ref, last_fetched,
+                       labels, assignees, requested_reviewers, comments
+                FROM pull_requests 
+                ORDER BY updated_at DESC
+            ''')
+        else:
+            cursor.execute('''
+                SELECT repo, number, title, html_url, user_login, user_avatar_url, created_at, updated_at, body, 
+                       state, draft, merged, mergeable_state, base_ref, head_ref, last_fetched,
+                       labels, assignees, requested_reviewers, comments
+                FROM pull_requests 
+                WHERE state = ? 
+                ORDER BY updated_at DESC
+            ''', (state_filter,))
+        
+        if span:
+            span.set_attribute("database.operation", "SELECT")
+            span.set_attribute("database.table", "pull_requests")
+        
+        prs = []
+        for row in cursor.fetchall():
+            pr = {
+                'repository': row[0],
+                'repo': row[0],
+                'repo_name': row[0],  # Add repo_name field for consistency with issues
+                'number': row[1],
+                'title': row[2],
+                'html_url': row[3],
+                'user_login': row[4],
+                'user_avatar_url': row[5],
+                'created_at': row[6],
+                'updated_at': row[7],
+                'body': row[8],
+                'state': row[9],
+                'draft': row[10],
+                'merged': row[11],
+                'mergeable_state': row[12],
+                'base_ref': row[13],
+                'head_ref': row[14],
+                'last_fetched': row[15],
+                'labels': row[16],
+                'assignees': row[17],
+                'requested_reviewers': row[18],
+                'comments': row[19] or ''
+            }
+            
+            # Parse labels JSON (with fallback for old records)
+            try:
+                if 'labels' in pr and pr['labels']:
+                    pr['labels'] = json.loads(pr['labels'])
+                else:
+                    pr['labels'] = []
+            except (json.JSONDecodeError, TypeError):
+                pr['labels'] = []
+            
+            # Parse assignees JSON (with fallback for old records)
+            try:
+                if 'assignees' in pr and pr['assignees']:
+                    pr['assignees'] = json.loads(pr['assignees'])
+                else:
+                    pr['assignees'] = []
+            except (json.JSONDecodeError, TypeError):
+                pr['assignees'] = []
+            
+            # Parse requested reviewers JSON (with fallback for old records)
+            try:
+                if 'requested_reviewers' in pr and pr['requested_reviewers']:
+                    pr['requested_reviewers'] = json.loads(pr['requested_reviewers'])
+                else:
+                    pr['requested_reviewers'] = []
+            except (json.JSONDecodeError, TypeError):
+                pr['requested_reviewers'] = []
+            
+            # Ensure comments field exists (with fallback for old records)
+            if 'comments' not in pr:
+                pr['comments'] = ''
+            
+            prs.append(pr)
+        
+        conn.close()
+        
+        # Log telemetry for business metrics only
+        pr_count = len(prs)
+        print(f"Successfully loaded {pr_count} pull requests from database")
+        
+        if span:
+            span.set_attribute("operation.count", pr_count)
+        
+        # Custom business metric
+        if pr_counter:
+            pr_counter.add(pr_count, {"state": state_filter})
+        
+        return prs
+    except Exception as e:
+        print(f"Error getting pull requests from database: {e}")
+        if span:
+            span.record_exception(e)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+        return get_sample_pull_requests()
+
+def get_sample_pull_requests():
+    """Return sample pull requests when database is not available"""
+    return [
+        {
+            'id': 1,
+            'repository': 'Azure/azure-sdk-for-python',
+            'repo': 'Azure/azure-sdk-for-python', 
+            'number': 456,
+            'title': 'Sample Pull Request - Database Not Available',
+            'html_url': 'https://github.com/Azure/azure-sdk-for-python/pull/456',
+            'state': 'open',
+            'user_login': 'octocat',
+            'created_at': '2025-01-01T00:00:00Z',
+            'updated_at': '2025-01-01T00:00:00Z',
+            'body': 'This is a sample pull request displayed when the database is not available.',
+            'draft': False,
+            'merged': False,
+            'mergeable_state': 'clean',
+            'base_ref': 'main',
+            'head_ref': 'feature-branch',
+            'labels': [{'name': 'sample', 'color': '00ff00', 'description': 'Sample label'}],
+            'assignees': [],
+            'requested_reviewers': [],
+            'comments': '',
+            'last_fetched': '2025-01-01T00:00:00Z',
+            'triage': 0,
+            'priority': -1
+        }
+    ]
+
 def get_sync_statistics():
     """Get comprehensive sync statistics for the dashboard"""
     try:
@@ -1558,10 +1909,10 @@ def get_sync_statistics():
         
         # Ensure all configured repositories are included, even if they have no issues yet
         repo_stats_dict = {rs['repo']: rs for rs in repo_stats}
-        for repo in REPOSITORIES:
-            if repo not in repo_stats_dict:
+        for repo_name in REPOSITORIES:
+            if repo_name not in repo_stats_dict:
                 repo_stats.append({
-                    'repo': repo,
+                    'repo': repo_name,
                     'open_count': 0,
                     'closed_count': 0,
                     'new_24h': 0,
@@ -1572,9 +1923,13 @@ def get_sync_statistics():
         # Sort by open count descending
         repo_stats.sort(key=lambda x: x['open_count'], reverse=True)
         
-        # Get issues with recent PR/mentions processing
-        cursor.execute('SELECT COUNT(*) FROM issues WHERE pr_mentions_last_updated IS NOT NULL')
-        processed_pr_mentions = cursor.fetchone()[0]
+        # Get issues with recent PR/mentions processing (if column exists)
+        try:
+            cursor.execute('SELECT COUNT(*) FROM issues WHERE pr_mentions_last_updated IS NOT NULL')
+            processed_pr_mentions = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            # Column doesn't exist (Phase 2 is disabled)
+            processed_pr_mentions = 0
         
         # Calculate API efficiency stats
         total_issues = total_open_issues + total_closed_issues
@@ -1899,7 +2254,7 @@ def get_all_repositories_from_db():
         print(f"❌ Error getting repositories from database: {e}")
         return []
 
-def generate_empty_repo_section(repo, current_state='open'):
+def generate_empty_repo_section(repo, current_state='open', data_type='issues'):
     """Generate HTML section for a repository with no issues matching current filter"""
     # Determine language group
     if repo in ['Azure/azure-sdk-for-python', 'open-telemetry/opentelemetry-python', 'open-telemetry/opentelemetry-python-contrib']:
@@ -1925,17 +2280,20 @@ def generate_empty_repo_section(repo, current_state='open'):
     repo_name = repo.split('/')[-1]
     repo_id = repo.replace('/', '-').replace('.', '-')
     
-    # Generate appropriate empty message based on state
+    # Generate appropriate empty message based on state and data type
+    data_label = "pull requests" if data_type == 'prs' else "issues"
+    data_label_cap = "Pull Requests" if data_type == 'prs' else "Issues"
+    
     if current_state == 'closed':
         empty_message = f"""
         <tr>
-            <td colspan="10" class="text-center py-4">
+            <td colspan="8" class="text-center py-4">
                 <div class="empty-table-message">
                     <i class="fas fa-check-circle text-muted" style="font-size: 2rem; margin-bottom: 1rem;"></i>
-                    <h5 class="text-muted">No closed issues found</h5>
-                    <p class="text-muted mb-0">This repository currently has no closed issues in the database.</p>
+                    <h5 class="text-muted">No closed {data_label} found</h5>
+                    <p class="text-muted mb-0">This repository has no closed {data_label} in the database.</p>
                     <button class="btn btn-outline-primary btn-sm mt-2" onclick="toggleIssueState()">
-                        <i class="fas fa-exclamation-circle"></i> View Open Issues
+                        <i class="fas fa-exclamation-circle"></i> View Open {data_label_cap}
                     </button>
                 </div>
             </td>
@@ -1944,13 +2302,13 @@ def generate_empty_repo_section(repo, current_state='open'):
     elif current_state == 'open':
         empty_message = f"""
         <tr>
-            <td colspan="10" class="text-center py-4">
+            <td colspan="8" class="text-center py-4">
                 <div class="empty-table-message">
                     <i class="fas fa-inbox text-success" style="font-size: 2rem; margin-bottom: 1rem;"></i>
-                    <h5 class="text-success">No open issues!</h5>
-                    <p class="text-muted mb-0">Great news! This repository has no open issues.</p>
+                    <h5 class="text-success">No open {data_label}!</h5>
+                    <p class="text-muted mb-0">Great news! This repository has no open {data_label}.</p>
                     <button class="btn btn-outline-secondary btn-sm mt-2" onclick="toggleIssueState()">
-                        <i class="fas fa-check-circle"></i> View Closed Issues
+                        <i class="fas fa-check-circle"></i> View Closed {data_label_cap}
                     </button>
                 </div>
             </td>
@@ -1959,11 +2317,11 @@ def generate_empty_repo_section(repo, current_state='open'):
     else:  # 'all'
         empty_message = f"""
         <tr>
-            <td colspan="10" class="text-center py-4">
+            <td colspan="8" class="text-center py-4">
                 <div class="empty-table-message">
                     <i class="fas fa-database text-muted" style="font-size: 2rem; margin-bottom: 1rem;"></i>
-                    <h5 class="text-muted">No issues found</h5>
-                    <p class="text-muted mb-0">This repository has no issues in the database.</p>
+                    <h5 class="text-muted">No {data_label} found</h5>
+                    <p class="text-muted mb-0">This repository has no {data_label} in the database.</p>
                     <a href="/sync" class="btn btn-outline-primary btn-sm mt-2">
                         <i class="fas fa-sync"></i> Sync Data
                     </a>
@@ -1983,8 +2341,11 @@ def generate_empty_repo_section(repo, current_state='open'):
         </div>
         <div class="controls d-flex justify-content-between align-items-center">
             <input type="text" class="form-control search-box" id="search-{repo_id}" 
-                   placeholder="🔍 Search issues..." 
+                   placeholder="🔍 Search {data_label}..." 
                    onkeyup="filterTable('{repo_id}', this.value)" style="flex: 1; margin-right: 10px;">
+            <div class="data-type-indicator">
+                <span class="badge badge-info">{data_type.title()}</span>
+            </div>
             <div class="state-controls">
                 <div class="toggle-switch" onclick="toggleIssueState()">
                     <input type="checkbox" id="state-toggle-{repo_id}" class="toggle-input" 
@@ -2022,16 +2383,14 @@ def generate_empty_repo_section(repo, current_state='open'):
             <table class="table table-hover table-striped issues-table {color_class} {state_class}" id="table-{repo_id}">
                 <thead class="table-header {color_class}" {header_style}>
                     <tr>
-                        <th style="width: 60px;">Edit</th>
+                        <th style="width: 60px;">Actions</th>
                         <th class="sortable" data-column="title" onclick="sortTable('{repo_id}', 'title')">
                             Title <i class="fas fa-sort sort-icon"></i>
                         </th>
                         <th class="sortable" data-column="assignee" onclick="sortTable('{repo_id}', 'assignee')">
                             Assignees <i class="fas fa-sort sort-icon"></i>
                         </th>
-                        <th>Related PRs/Issues</th>
                         <th>Labels</th>
-                        <th>Mentions</th>
                         <th class="sortable" data-column="created" onclick="sortTable('{repo_id}', 'created')">
                             Created <i class="fas fa-sort sort-icon"></i>
                         </th>
@@ -2054,7 +2413,7 @@ def generate_empty_repo_section(repo, current_state='open'):
     </div>
     """
 
-def generate_repo_section(repo, issues, is_first=False, current_state='open'):
+def generate_repo_section(repo, data_items, is_first=False, current_state='open', data_type='issues'):
     """Generate HTML section for a repository"""
     # Determine language group
     if repo in ['Azure/azure-sdk-for-python', 'open-telemetry/opentelemetry-python', 'open-telemetry/opentelemetry-python-contrib']:
@@ -2079,16 +2438,16 @@ def generate_repo_section(repo, issues, is_first=False, current_state='open'):
     
     repo_name = repo.split('/')[-1]
     repo_id = repo.replace('/', '-').replace('.', '-')
-    issue_count = len(issues)
+    data_count = len(data_items)
     
     # Set CSS classes for visibility - no repo is active by default
     active_class = ""
     
-    # Generate issue rows
-    issue_rows = ""
-    for i, issue in enumerate(issues):  # Show ALL issues, pagination will handle display
+    # Generate data rows (issues or PRs)
+    data_rows = ""
+    for i, item in enumerate(data_items):  # Show ALL items, pagination will handle display
         try:
-            created_date = datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))
+            created_date = datetime.fromisoformat(item['created_at'].replace('Z', '+00:00'))
             created_days_old = (datetime.now(timezone.utc) - created_date).days
             # New age classification: 0-14 days = recent (green), 15-30 days = medium (yellow), 
             # 31-60 days = old (red), 60+ days = stale (purple)
@@ -2105,8 +2464,8 @@ def generate_repo_section(repo, issues, is_first=False, current_state='open'):
         
         # Calculate age class for updated date
         try:
-            if issue['updated_at']:
-                updated_date = datetime.fromisoformat(issue['updated_at'].replace('Z', '+00:00'))
+            if item['updated_at']:
+                updated_date = datetime.fromisoformat(item['updated_at'].replace('Z', '+00:00'))
                 updated_days_old = (datetime.now(timezone.utc) - updated_date).days
                 # Same age classification for updated dates
                 if updated_days_old <= 14:
@@ -2117,93 +2476,141 @@ def generate_repo_section(repo, issues, is_first=False, current_state='open'):
                     updated_age_class = "old"
                 else:
                     updated_age_class = "stale"
-                updated_display = issue['updated_at'][:10]
+                updated_display = item['updated_at'][:10]
             else:
                 updated_age_class = "unknown"
                 updated_display = 'N/A'
         except:
             updated_age_class = "unknown"
-            updated_display = issue['updated_at'][:10] if issue['updated_at'] else 'N/A'
+            updated_display = item['updated_at'][:10] if item['updated_at'] else 'N/A'
         
         # Get assignee information (support both new multiple assignees and old single assignee)
-        assignees = issue.get('assignees', [])
-        fallback_assignee = issue.get('assignee_login')
-        assignee_display = format_assignees_for_display(assignees, fallback_assignee)
+        assignees = item.get('assignees', [])
+        fallback_assignee = item.get('assignee_login')
         
-        # For sorting purposes, create a simplified assignee string
-        if assignees and len(assignees) > 0:
-            assignee_sort_key = assignees[0].get('login', 'zzz_unassigned').lower()
-        elif fallback_assignee:
-            assignee_sort_key = fallback_assignee.lower()
+        if data_type == 'prs':
+            # For PRs, get author and reviewers
+            author_login = item.get('user_login', 'Unknown')
+            reviewers = item.get('requested_reviewers', [])
+            
+            # Format reviewers for display
+            if isinstance(reviewers, str):
+                try:
+                    reviewers = json.loads(reviewers)
+                except:
+                    reviewers = []
+            
+            reviewer_display = format_assignees_for_display(reviewers, None) if reviewers else 'None'
+            
+            # For sorting, use author login
+            assignee_sort_key = author_login.lower() if author_login else 'zzz_unknown'
+            
+            # Set PR status
+            pr_status = "Draft" if item.get('draft', False) else ("Merged" if item.get('merged', False) else item.get('state', 'open').title())
+            
         else:
-            assignee_sort_key = 'zzz_unassigned'
+            # For Issues, use existing assignee logic
+            assignee_display = format_assignees_for_display(assignees, fallback_assignee)
+            
+            # For sorting purposes, create a simplified assignee string
+            if assignees and len(assignees) > 0:
+                assignee_sort_key = assignees[0].get('login', 'zzz_unassigned').lower()
+            elif fallback_assignee:
+                assignee_sort_key = fallback_assignee.lower()
+            else:
+                assignee_sort_key = 'zzz_unassigned'
         
         # Extract PR references from issue body instead of using database linked_pr field
-        pr_references = extract_pr_references(issue.get('body', ''), repo)
-        pr_display = format_pr_references(pr_references)
+        # pr_references = extract_pr_references(item.get('body', ''), repo)
+        # pr_display = format_pr_references(pr_references)
         
         # Format labels for display
-        labels_display = format_labels_for_display(issue.get('labels', []))
+        labels_display = format_labels_for_display(item.get('labels', []))
         
-        # Format mentions for display
-        mentions_display = format_mentions_for_display(issue.get('mentioned_handles', []))
+        # Format mentions for display (kept for modal, but not displayed in table)
+        # mentions_display = format_mentions_for_display(item.get('mentioned_handles', []))
         
-        # Get triage and priority information
-        triage = issue.get('triage', 0)
-        priority = issue.get('priority', -1)
+        # Get triage and priority information (only for issues)
+        if data_type == 'issues':
+            triage = item.get('triage', 0)
+            priority = item.get('priority', -1)
+        else:
+            triage = 0
+            priority = -1
         
         # Get parsed assignees (should already be a list from database loading)
-        assignees_data = issue.get('assignees', [])
-        print(f"DEBUG: Issue #{issue['number']} assignees: {assignees_data} (type: {type(assignees_data)})")
+        assignees_data = item.get('assignees', [])
+        print(f"DEBUG: Item #{item['number']} assignees: {assignees_data} (type: {type(assignees_data)})")
         
         # Prepare safe JSON data for modal (properly escaped for JavaScript)
         modal_data = {
             'repo': repo,
-            'number': issue['number'],
-            'title': issue['title'],
-            'htmlUrl': issue['html_url'],
-            'triage': triage,
-            'priority': priority,
-            'comments': issue.get('comments', ''),
-            'assignees': assignees_data,
-            'labels': issue.get('labels', []),
-            'mentions': issue.get('mentioned_handles', [])
+            'number': item['number'],
+            'title': item['title'],
+            'htmlUrl': item['html_url'],
+            'body': item.get('body', ''),
+            'dataType': data_type,
+            'comments': item.get('comments', ''),
+            'labels': item.get('labels', []),
+            'mentions': item.get('mentioned_handles', [])
         }
+        
+        # Add data-type specific fields
+        if data_type == 'prs':
+            modal_data.update({
+                'author': author_login,
+                'reviewers': reviewers,
+                'status': pr_status,
+                'draft': item.get('draft', False),
+                'merged': item.get('merged', False),
+                'baseRef': item.get('base_ref', ''),
+                'headRef': item.get('head_ref', '')
+            })
+        else:
+            modal_data.update({
+                'triage': triage,
+                'priority': priority,
+                'assignees': assignees_data
+            })
         
         # Convert to JSON and escape for HTML attributes
         modal_data_json = html.escape(json.dumps(modal_data))
         
-        issue_rows += f"""
-        <tr data-repo="{html.escape(repo)}" data-number="{issue['number']}" 
-            data-title="{html.escape(issue['title'].lower())}" 
+        data_rows += f"""
+        <tr data-repo="{html.escape(repo)}" data-number="{item['number']}" 
+            data-title="{html.escape(item['title'].lower())}" 
             data-assignee="{html.escape(assignee_sort_key)}"
-            data-created="{html.escape(issue['created_at'])}" 
-            data-updated="{html.escape(issue['updated_at'])}"
-            data-triage="{triage}"
-            data-priority="{priority}">
+            data-created="{html.escape(item['created_at'])}" 
+            data-updated="{html.escape(item['updated_at'])}"
+            {'data-triage="' + str(triage) + '" data-priority="' + str(priority) + '"' if data_type == 'issues' else 'data-status="' + html.escape(pr_status) + '"'}>
             <td style="text-align: center;">
-                <button class="btn btn-sm btn-outline-primary edit-btn" 
-                        data-modal-data="{modal_data_json}"
-                        onclick="openIssueModalFromData(this)"
-                        title="Edit issue details">
-                    <i class="fas fa-edit"></i>
-                </button>
+                <a href="{item['html_url']}" target="_blank" class="btn btn-sm btn-outline-dark github-btn" title="View on GitHub">
+                    <i class="fab fa-github"></i>
+                </a>
             </td>
             <td>
-                <a href="{issue['html_url']}" target="_blank" class="issue-title-link">#{issue['number']} - {html.escape(issue['title'])}</a>
-            </td>
-            <td>{assignee_display}</td>
-            <td>{pr_display}</td>
+                <a href="#" class="issue-title-link" 
+                   data-modal-data="{modal_data_json}"
+                   onclick="openIssueModalFromData(this); return false;"
+                   title="Click to edit {'issue' if data_type == 'issues' else 'pull request'} details">
+                    #{item['number']} - {html.escape(item['title'])}
+                </a>
+            </td>""" + (f"""
+            <td>{author_login}</td>
+            <td>{reviewer_display}</td>""" if data_type == 'prs' else f"""
+            <td>{assignee_display}</td>""") + f"""
             <td>{labels_display}</td>
-            <td>{mentions_display}</td>
-            <td class="{created_age_class}">{issue['created_at'][:10]}</td>
-            <td class="{updated_age_class}">{updated_display}</td>
+            <td class="{created_age_class}">{item['created_at'][:10]}</td>
+            <td class="{updated_age_class}">{updated_display}</td>""" + (f"""
             <td class="triage-display">
                 {format_triage_text(triage)}
             </td>
             <td class="priority-display">
                 {format_priority_text(priority)}
-            </td>
+            </td>""" if data_type == 'issues' else f"""
+            <td class="status-display">
+                <span class="badge badge-{'success' if pr_status == 'Merged' else 'secondary' if pr_status == 'Draft' else 'primary'}">{pr_status}</span>
+            </td>""") + f"""
         </tr>
         """
     
@@ -2215,14 +2622,17 @@ def generate_repo_section(repo, issues, is_first=False, current_state='open'):
         <div class="repo-header{active_class} {color_class}" onclick="toggleSection('{repo_id}')">
             <h2>
                 <a href="https://github.com/{repo}" target="_blank">{repo_name}</a>
-                <span class="category-badge {color_class}">{issue_count}</span>
+                <span class="category-badge {color_class}">{data_count}</span>
                 <span class="category-badge {color_class}">{repo_category.upper()}</span>
             </h2>
         </div>
         <div class="controls d-flex justify-content-between align-items-center">
             <input type="text" class="form-control search-box" id="search-{repo_id}" 
-                   placeholder="🔍 Search issues..." 
+                   placeholder="🔍 Search {data_type}..." 
                    onkeyup="filterTable('{repo_id}', this.value)" style="flex: 1; margin-right: 10px;">
+            <div class="data-type-indicator">
+                <span class="badge badge-info">{data_type.title()}</span>
+            </div>
             <div class="state-controls">
                 <div class="toggle-switch" onclick="toggleIssueState()">
                     <input type="checkbox" id="state-toggle-{repo_id}" class="toggle-input" 
@@ -2260,38 +2670,45 @@ def generate_repo_section(repo, issues, is_first=False, current_state='open'):
             <table class="table table-hover table-striped issues-table {color_class} {state_class}" id="table-{repo_id}">
                 <thead class="table-header {color_class}" {header_style}>
                     <tr>
-                        <th style="width: 60px;">Edit</th>
+                        <th style="width: 60px;">Actions</th>
                         <th class="sortable" data-column="title" onclick="sortTable('{repo_id}', 'title')">
                             Title <i class="fas fa-sort sort-icon"></i>
+                        </th>""" + (f"""
+                        <th class="sortable" data-column="author" onclick="sortTable('{repo_id}', 'author')">
+                            Author <i class="fas fa-sort sort-icon"></i>
                         </th>
+                        <th class="sortable" data-column="reviewers" onclick="sortTable('{repo_id}', 'reviewers')">
+                            Reviewers <i class="fas fa-sort sort-icon"></i>
+                        </th>""" if data_type == 'prs' else f"""
                         <th class="sortable" data-column="assignee" onclick="sortTable('{repo_id}', 'assignee')">
                             Assignees <i class="fas fa-sort sort-icon"></i>
-                        </th>
-                        <th>Related PRs/Issues</th>
+                        </th>""") + f"""
                         <th>Labels</th>
-                        <th>Mentions</th>
                         <th class="sortable" data-column="created" onclick="sortTable('{repo_id}', 'created')">
                             Created <i class="fas fa-sort sort-icon"></i>
                         </th>
                         <th class="sortable" data-column="updated" onclick="sortTable('{repo_id}', 'updated')">
                             Updated <i class="fas fa-sort sort-icon"></i>
-                        </th>
+                        </th>""" + (f"""
                         <th class="sortable" data-column="triage" onclick="sortTable('{repo_id}', 'triage')">
                             Triage <i class="fas fa-sort sort-icon"></i>
                         </th>
                         <th class="sortable" data-column="priority" onclick="sortTable('{repo_id}', 'priority')">
                             Priority <i class="fas fa-sort sort-icon"></i>
-                        </th>
+                        </th>""" if data_type == 'issues' else f"""
+                        <th class="sortable" data-column="status" onclick="sortTable('{repo_id}', 'status')">
+                            Status <i class="fas fa-sort sort-icon"></i>
+                        </th>""") + f"""
                     </tr>
                 </thead>
                 <tbody>
-                    {issue_rows}
+                    {data_rows}
                 </tbody>
             </table>
             <!-- Pagination controls -->
             <div class="d-flex justify-content-between align-items-center pagination" id="pagination-{repo_id}" style="display: none;">
                 <div class="pagination-info text-muted" id="page-info-{repo_id}">
-                    Showing 1-10 of {issue_count} issues
+                    Showing 1-10 of {data_count} {data_type}
                 </div>
                 <div class="pagination-controls d-flex align-items-center">
                     <button class="btn btn-outline-secondary btn-sm me-2" id="prev-btn-{repo_id}" onclick="prevPage('{repo_id}')" disabled>
@@ -2590,6 +3007,11 @@ def _dashboard_internal(span=None):
     selected_repo = request.args.get('repo', '')
     selected_repo = unquote(selected_repo) if selected_repo else ''
     
+    # Get the data type from query parameter (default to 'issues')
+    data_type = request.args.get('type', 'issues')
+    if data_type not in ['issues', 'prs']:
+        data_type = 'issues'  # Default to issues if invalid value
+    
     # Get the state filter from query parameter (default to 'open')
     show_state = request.args.get('state', 'open')
     if show_state not in ['open', 'closed', 'all']:
@@ -2597,28 +3019,36 @@ def _dashboard_internal(span=None):
     
     if span:
         span.set_attribute("dashboard.selected_repo", selected_repo)
+        span.set_attribute("dashboard.data_type", data_type)
         span.set_attribute("dashboard.show_state", show_state)
         span.set_attribute("request.method", "GET")
         span.set_attribute("request.user_agent", request.headers.get('User-Agent', 'unknown'))
-        logger.info(f"Dashboard telemetry span active with selected_repo: {selected_repo}, state: {show_state}")
+        logger.info(f"Dashboard telemetry span active with selected_repo: {selected_repo}, type: {data_type}, state: {show_state}")
     else:
         logger.warning("Dashboard telemetry span is None - telemetry may not be configured")
     
-    # Get issues from database
-    issues = get_issues_from_db(state_filter=show_state)
+    # Get data from database based on data type
+    if data_type == 'prs':
+        data_items = get_pull_requests_from_db(state_filter=show_state)
+        data_label = "Pull Requests"
+        data_label_singular = "Pull Request"
+    else:
+        data_items = get_issues_from_db(state_filter=show_state) 
+        data_label = "Issues"
+        data_label_singular = "Issue"
     
     if span:
-        span.set_attribute("dashboard.issues_found", len(issues) > 0)
-        span.set_attribute("dashboard.total_issues", len(issues))
+        span.set_attribute("dashboard.data_found", len(data_items) > 0)
+        span.set_attribute("dashboard.total_items", len(data_items))
     
-    # If no issues found, we'll render the template with empty sections
+    # If no data found, we'll render the template with empty sections
     # This ensures the UI is always consistent with navigation and toggle
-    if not issues:
+    if not data_items:
         if span:
             span.set_attribute("dashboard.empty_state", True)
     
-    # Group issues by repository (will be empty dict if no issues)
-    repo_groups = group_issues_by_repo(issues)
+    # Group data by repository (will be empty dict if no data)
+    repo_groups = group_issues_by_repo(data_items)  # Note: function name is generic for both issues and PRs
     
     if span:
         span.set_attribute("dashboard.repository_count", len(repo_groups))
@@ -2645,16 +3075,16 @@ def _dashboard_internal(span=None):
     # Get all configured repositories in sorted order (Azure, OpenTelemetry, Microsoft)
     all_repositories = get_all_configured_repositories()
     
-    # Generate repository sections for repos with issues
-    for repo, repo_issues in repo_groups.items():
+    # Generate repository sections for repos with data
+    for repo, repo_data in repo_groups.items():
         repo_id = repo.replace('/', '-').replace('.', '-')
-        repo_sections += generate_repo_section(repo, repo_issues, is_first, show_state)
+        repo_sections += generate_repo_section(repo, repo_data, is_first, show_state, data_type)
         is_first = False
     
-    # Generate empty sections for repos without issues in current state
+    # Generate empty sections for repos without data in current state
     for repo in all_repositories:
         if repo not in repo_groups:
-            repo_sections += generate_empty_repo_section(repo, show_state)
+            repo_sections += generate_empty_repo_section(repo, show_state, data_type)
     
     # Generate navigation links for ALL repositories (sorted by priority)
     for repo in all_repositories:
@@ -2766,10 +3196,10 @@ def _dashboard_internal(span=None):
         repo_sections = empty_state_css + empty_state_message
     
     # Calculate statistics
-    total_repos = len(all_repositories)  # Count all configured repos, not just those with issues
-    total_issues = len(issues)
-    recent_issues = sum(1 for issue in issues if (datetime.now(timezone.utc) - datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))).days < 14)
-    stale_issues = sum(1 for issue in issues if (datetime.now(timezone.utc) - datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))).days > 60)
+    total_repos = len(all_repositories)  # Count all configured repos, not just those with data
+    total_items = len(data_items)
+    recent_items = sum(1 for item in data_items if (datetime.now(timezone.utc) - datetime.fromisoformat(item['created_at'].replace('Z', '+00:00'))).days < 14)
+    stale_items = sum(1 for item in data_items if (datetime.now(timezone.utc) - datetime.fromisoformat(item['created_at'].replace('Z', '+00:00'))).days > 60)
     
     # Get sync statistics
     sync_stats = get_sync_statistics()
@@ -2783,12 +3213,15 @@ def _dashboard_internal(span=None):
     html = html.replace('{dotnet_nav_links}', dotnet_nav_links)
     html = html.replace('{java_nav_links}', java_nav_links)
     html = html.replace('{total_repos}', str(total_repos))
-    html = html.replace('{total_issues}', str(total_issues))
-    html = html.replace('{recent_issues}', str(recent_issues))
-    html = html.replace('{stale_issues}', str(stale_issues))
+    html = html.replace('{total_issues}', str(total_items))
+    html = html.replace('{recent_issues}', str(recent_items))
+    html = html.replace('{stale_issues}', str(stale_items))
     html = html.replace('{database_info_text}', get_last_sync_time())
     html = html.replace('{selected_repo}', selected_repo)
     html = html.replace('{current_state}', show_state)
+    html = html.replace('{current_data_type}', data_type)
+    html = html.replace('{data_label}', data_label)
+    html = html.replace('{data_label_singular}', data_label_singular)
     html = html.replace('{state_button_text}', get_state_button_text(show_state))
     
     # Add sync statistics replacements
@@ -2831,6 +3264,282 @@ def _dashboard_internal(span=None):
         window.currentState = '{show_state}';
     </script>
     ''')
+    
+    return html
+
+def get_repository_language(repo_name):
+    """Get the language category for a repository"""
+    if repo_name in ['Azure/azure-sdk-for-python', 'open-telemetry/opentelemetry-python', 'open-telemetry/opentelemetry-python-contrib']:
+        return 'python'
+    elif repo_name in ['Azure/azure-sdk-for-js', 'open-telemetry/opentelemetry-js', 'open-telemetry/opentelemetry-js-contrib',
+                      'microsoft/ApplicationInsights-node.js', 'microsoft/ApplicationInsights-node.js-native-metrics', 
+                      'microsoft/node-diagnostic-channel']:
+        return 'nodejs'
+    elif repo_name in ['Azure/azure-sdk-for-net', 'microsoft/ApplicationInsights-dotnet', 'open-telemetry/opentelemetry-dotnet']:
+        return 'dotnet'
+    elif repo_name in ['open-telemetry/opentelemetry-java', 'microsoft/ApplicationInsights-Java']:
+        return 'java'
+    else:
+        return 'browser'
+
+def generate_stats_template(issues, pull_requests, sync_stats):
+    """Generate the stats page HTML"""
+    
+    # Create basic navbar links (same as dashboard)
+    nodejs_nav_links = ""
+    python_nav_links = ""
+    browser_nav_links = ""
+    dotnet_nav_links = ""
+    java_nav_links = ""
+    
+    # Group repositories by language
+    repos_by_language = {
+        'nodejs': [],
+        'python': [],
+        'browser': [],
+        'dotnet': [],
+        'java': []
+    }
+    
+    for repo_name in REPOSITORIES:
+        language = get_repository_language(repo_name)
+        if language in repos_by_language:
+            repos_by_language[language].append(repo_name)
+    
+    # Generate navigation links for each language
+    for language, repos in repos_by_language.items():
+        nav_links = ""
+        total_count = 0
+        for repo_name in repos:
+            safe_name = quote(repo_name)
+            display_name = repo_name.replace("opentelemetry-", "").replace("azure-", "").replace("dotnet-", "").replace("java-", "")
+            repo_issues = [issue for issue in issues if issue['repository'] == repo_name]
+            open_count = len([issue for issue in repo_issues if issue['state'] == 'open'])
+            total_count += open_count
+            
+            nav_links += f'''
+                <a class="dropdown-item otel-theme" href="/?repo={safe_name}">
+                    <span class="nav-repo-name">{display_name}</span>
+                    <span class="badge badge-primary ml-auto">{open_count}</span>
+                </a>
+            '''
+        
+        # Store the navigation links and counts
+        if language == 'nodejs':
+            nodejs_nav_links = nav_links
+        elif language == 'python':
+            python_nav_links = nav_links
+        elif language == 'browser':
+            browser_nav_links = nav_links
+        elif language == 'dotnet':
+            dotnet_nav_links = nav_links
+        elif language == 'java':
+            java_nav_links = nav_links
+    
+    # Calculate statistics
+    total_repos = len(REPOSITORIES)
+    total_issues = len(issues)
+    total_prs = len(pull_requests)
+    recent_issues = sum(1 for issue in issues if (datetime.now(timezone.utc) - datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))).days < 14)
+    stale_issues = sum(1 for issue in issues if (datetime.now(timezone.utc) - datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))).days > 60)
+    
+    # Generate repo stats table
+    repo_stats_html = ""
+    for repo_stat in sync_stats['repo_stats']:
+        repo_stats_html += f"""
+        <tr>
+            <td><strong>{repo_stat['repo']}</strong></td>
+            <td><span class="badge badge-success">{repo_stat['open_count']}</span></td>
+            <td><span class="badge badge-secondary">{repo_stat['closed_count']}</span></td>
+            <td><span class="badge badge-info">{repo_stat['new_24h']}</span></td>
+            <td><span class="badge badge-warning">{repo_stat['updated_24h']}</span></td>
+            <td><small class="text-muted">{repo_stat['last_updated']}</small></td>
+        </tr>
+        """
+    
+    # Create stats page content (no data type toggle, just stats)
+    stats_content = f"""
+        <div class="intro-page">
+            <div class="intro-content">
+                <div class="intro-header">
+                    <i class="fas fa-chart-bar intro-icon"></i>
+                    <h1>Repository Statistics</h1>
+                    <p class="intro-subtitle">Comprehensive overview of all repositories</p>
+                </div>
+                
+                <div class="intro-stats">
+                    <h3>Repository Overview</h3>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-number">{total_repos}</span>
+                            <span class="stat-label">Total Repositories</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number">{total_issues}</span>
+                            <span class="stat-label">Total Issues</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number">{total_prs}</span>
+                            <span class="stat-label">Total Pull Requests</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number text-info">{recent_issues}</span>
+                            <span class="stat-label">Recent Issues (14 days)</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-number text-warning">{stale_issues}</span>
+                            <span class="stat-label">Stale Issues (60+ days)</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Sync Statistics Section -->
+                    <div class="sync-stats-section">
+                        <h4><i class="fas fa-sync-alt"></i> Sync Status</h4>
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="sync-stat-card">
+                                    <div class="sync-stat-number text-success">{sync_stats['total_open_issues']}</div>
+                                    <div class="sync-stat-label">Total Open</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="sync-stat-card">
+                                    <div class="sync-stat-number text-secondary">{sync_stats['total_closed_issues']}</div>
+                                    <div class="sync-stat-label">Total Closed</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="sync-stat-card">
+                                    <div class="sync-stat-number text-info">{sync_stats['new_issues_24h']}</div>
+                                    <div class="sync-stat-label">New (24h)</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="sync-stat-card">
+                                    <div class="sync-stat-number text-warning">{sync_stats['updated_issues_24h']}</div>
+                                    <div class="sync-stat-label">Updated (24h)</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="sync-info-section">
+                            <p><strong>Last Sync:</strong> {sync_stats['last_sync']}</p>
+                            <p><strong>Sync Status:</strong> {'In Progress' if sync_stats['sync_in_progress'] else 'Completed'}</p>
+                            {f"<p><strong>Sync Errors:</strong> {sync_stats['sync_errors']}</p>" if sync_stats['sync_errors'] > 0 else ""}
+                        </div>
+                    </div>
+                    
+                    <!-- Repository Stats Table -->
+                    <div class="repo-stats-table">
+                        <h5><i class="fas fa-table"></i> Repository Breakdown</h5>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th>Repository</th>
+                                        <th><i class="fas fa-exclamation-circle text-success"></i> Open</th>
+                                        <th><i class="fas fa-check-circle text-secondary"></i> Closed</th>
+                                        <th><i class="fas fa-plus text-info"></i> New (24h)</th>
+                                        <th><i class="fas fa-edit text-warning"></i> Updated (24h)</th>
+                                        <th><i class="fas fa-clock"></i> Last Updated</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {repo_stats_html}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="intro-actions">
+                    <div class="action-section">
+                        <h3>About This Project</h3>
+                        <p>This dashboard is built to help manage GitHub issues across Azure Monitor TelReach SDKs.</p>
+                        <a href="https://github.com/hectorhdzg/github-issues-dashboard" target="_blank" class="github-link">
+                            <i class="fab fa-github"></i>
+                            View on GitHub
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    """
+    
+    # Load template and replace placeholders
+    template = load_html_template()
+    
+    # For stats page, hide the data type toggle and show stats content
+    stats_template = template.replace('class="global-data-type-toggle"', 'class="global-data-type-toggle" style="display: none;"')
+    
+    html = stats_template.replace('{repo_sections}', stats_content)
+    html = html.replace('{nodejs_nav_links}', nodejs_nav_links)
+    html = html.replace('{python_nav_links}', python_nav_links)
+    html = html.replace('{browser_nav_links}', browser_nav_links)
+    html = html.replace('{dotnet_nav_links}', dotnet_nav_links)
+    html = html.replace('{java_nav_links}', java_nav_links)
+    html = html.replace('{total_repos}', str(total_repos))
+    html = html.replace('{total_issues}', str(total_issues))
+    html = html.replace('{recent_issues}', str(recent_issues))
+    html = html.replace('{stale_issues}', str(stale_issues))
+    html = html.replace('{database_info_text}', get_last_sync_time())
+    html = html.replace('{selected_repo}', '')  # No repo selected on stats page
+    html = html.replace('{current_state}', 'open')
+    html = html.replace('{current_data_type}', 'issues')
+    html = html.replace('{data_label}', 'Issues')
+    html = html.replace('{data_label_singular}', 'Issue')
+    html = html.replace('{state_button_text}', 'Open Issues')
+    
+    # Add counts for navbar badges
+    nodejs_count = len([issue for issue in issues if issue['repository'] in repos_by_language['nodejs']])
+    python_count = len([issue for issue in issues if issue['repository'] in repos_by_language['python']])
+    browser_count = len([issue for issue in issues if issue['repository'] in repos_by_language['browser']])
+    dotnet_count = len([issue for issue in issues if issue['repository'] in repos_by_language['dotnet']])
+    java_count = len([issue for issue in issues if issue['repository'] in repos_by_language['java']])
+    
+    # Add the script to update navbar counts
+    html += f'''
+    <script>
+        // Update navbar counts
+        document.getElementById('navbar-nodejs-count').textContent = '{nodejs_count}';
+        document.getElementById('navbar-python-count').textContent = '{python_count}';
+        document.getElementById('navbar-browser-count').textContent = '{browser_count}';
+        document.getElementById('navbar-dotnet-count').textContent = '{dotnet_count}';
+        document.getElementById('navbar-java-count').textContent = '{java_count}';
+    </script>
+    '''
+    
+    return html
+
+@app.route('/stats')
+@login_required
+def stats():
+    """Stats page route"""
+    # Create custom span for stats page rendering
+    if tracer:
+        with tracer.start_as_current_span("stats_render") as span:
+            span.set_attribute("user.name", get_current_user().get('name', 'unknown'))
+            span.set_attribute("user.email", get_current_user().get('email', 'unknown'))
+            return _stats_internal(span)
+    else:
+        return _stats_internal(None)
+
+def _stats_internal(span=None):
+    """Internal stats function with telemetry"""
+    print("📊 Serving Stats Page...")
+    logger.info("Stats request received")
+    
+    if span:
+        logger.warning("Stats telemetry span is None - telemetry may not be configured")
+    
+    # Load data from database
+    issues = get_issues_from_db()
+    pull_requests = get_pull_requests_from_db()
+    
+    # Get repository information and statistics
+    repo_stats = get_sync_statistics()
+    
+    # Generate stats template with the current data
+    html = generate_stats_template(issues, pull_requests, repo_stats)
     
     return html
 
