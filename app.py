@@ -492,36 +492,76 @@ def update_database_schema():
             cursor.execute("ALTER TABLE issues ADD COLUMN pr_mentions_last_updated TEXT DEFAULT NULL")
             print("✅ Added 'pr_mentions_last_updated' column")
         
-        # Create pull_requests table if it doesn't exist
-        # Drop existing table if it has wrong schema (with triage/priority)
-        cursor.execute('DROP TABLE IF EXISTS pull_requests')
+        # Create pull_requests table if it doesn't exist or has wrong schema
+        # Check if pull_requests table exists and get its schema
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pull_requests'")
+        pr_table_exists = cursor.fetchone() is not None
         
-        cursor.execute('''
-            CREATE TABLE pull_requests (
-                repo TEXT NOT NULL,
-                number INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                html_url TEXT NOT NULL,
-                user_login TEXT NOT NULL,
-                user_avatar_url TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                body TEXT,
-                state TEXT NOT NULL,
-                draft BOOLEAN DEFAULT FALSE,
-                merged BOOLEAN DEFAULT FALSE,
-                mergeable_state TEXT,
-                base_ref TEXT,
-                head_ref TEXT,
-                last_fetched TEXT,
-                labels TEXT DEFAULT '[]',
-                assignees TEXT DEFAULT '[]',
-                requested_reviewers TEXT DEFAULT '[]',
-                comments TEXT DEFAULT '',
-                PRIMARY KEY (repo, number)
-            )
-        ''')
-        print("📋 Created/verified pull_requests table")
+        should_recreate_pr_table = False
+        
+        if pr_table_exists:
+            # Check if the existing table has the correct schema
+            cursor.execute("PRAGMA table_info(pull_requests)")
+            pr_columns = [row[1] for row in cursor.fetchall()]
+            
+            # Expected columns for the current schema
+            expected_pr_columns = [
+                'repo', 'number', 'title', 'html_url', 'user_login', 'user_avatar_url',
+                'created_at', 'updated_at', 'body', 'state', 'draft', 'merged', 
+                'mergeable_state', 'base_ref', 'head_ref', 'last_fetched', 
+                'labels', 'assignees', 'requested_reviewers', 'comments'
+            ]
+            
+            # Check if schema has wrong columns (like triage/priority from old issues schema)
+            wrong_columns = ['triage', 'priority']
+            has_wrong_columns = any(col in pr_columns for col in wrong_columns)
+            
+            # Check if missing required columns
+            missing_columns = [col for col in expected_pr_columns if col not in pr_columns]
+            
+            if has_wrong_columns or missing_columns:
+                print(f"📋 Pull requests table has incorrect schema. Wrong columns: {[c for c in wrong_columns if c in pr_columns]}, Missing columns: {missing_columns}")
+                should_recreate_pr_table = True
+            else:
+                print("✅ Pull requests table already has correct schema")
+        else:
+            print("📋 Pull requests table doesn't exist, will create it")
+            should_recreate_pr_table = True
+        
+        if should_recreate_pr_table:
+            if pr_table_exists:
+                print("🗑️ Dropping pull_requests table with incorrect schema...")
+                cursor.execute('DROP TABLE pull_requests')
+            
+            print("📋 Creating pull_requests table with correct schema...")
+            cursor.execute('''
+                CREATE TABLE pull_requests (
+                    repo TEXT NOT NULL,
+                    number INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    html_url TEXT NOT NULL,
+                    user_login TEXT NOT NULL,
+                    user_avatar_url TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    body TEXT,
+                    state TEXT NOT NULL,
+                    draft BOOLEAN DEFAULT FALSE,
+                    merged BOOLEAN DEFAULT FALSE,
+                    mergeable_state TEXT,
+                    base_ref TEXT,
+                    head_ref TEXT,
+                    last_fetched TEXT,
+                    labels TEXT DEFAULT '[]',
+                    assignees TEXT DEFAULT '[]',
+                    requested_reviewers TEXT DEFAULT '[]',
+                    comments TEXT DEFAULT '',
+                    PRIMARY KEY (repo, number)
+                )
+            ''')
+            print("✅ Created pull_requests table with correct schema")
+        else:
+            print("✅ Pull requests table schema is already correct, preserving existing data")
         
         conn.commit()
         conn.close()
@@ -3313,7 +3353,7 @@ def generate_stats_template(issues, pull_requests, sync_stats):
         for repo_name in repos:
             safe_name = quote(repo_name)
             display_name = repo_name.replace("opentelemetry-", "").replace("azure-", "").replace("dotnet-", "").replace("java-", "")
-            repo_issues = [issue for issue in issues if issue['repository'] == repo_name]
+            repo_issues = [issue for issue in issues if issue['repo'] == repo_name]
             open_count = len([issue for issue in repo_issues if issue['state'] == 'open'])
             total_count += open_count
             
@@ -3529,6 +3569,10 @@ def _stats_internal(span=None):
     logger.info("Stats request received")
     
     if span:
+        span.set_attribute("stats.page", "overview")
+        span.set_attribute("request.method", "GET")
+        logger.info("Stats telemetry span active")
+    else:
         logger.warning("Stats telemetry span is None - telemetry may not be configured")
     
     # Load data from database
@@ -3537,6 +3581,10 @@ def _stats_internal(span=None):
     
     # Get repository information and statistics
     repo_stats = get_sync_statistics()
+    
+    if span:
+        span.set_attribute("stats.issues_count", len(issues))
+        span.set_attribute("stats.pull_requests_count", len(pull_requests))
     
     # Generate stats template with the current data
     html = generate_stats_template(issues, pull_requests, repo_stats)
