@@ -12,7 +12,7 @@ import requests
 import schedule
 import html
 import re
-from flask import Flask, render_template_string, jsonify, request, session, redirect, url_for
+from flask import Flask, render_template, render_template_string, jsonify, request, session, redirect, url_for
 import sqlite3
 import json
 from datetime import datetime, timezone, timedelta
@@ -1944,24 +1944,30 @@ def get_sync_statistics():
                 'closed_count': closed_count,
                 'new_24h': new_24h,
                 'updated_24h': updated_24h,
-                'last_updated': last_updated_formatted
+                'last_updated': last_updated_formatted,
+                'issues': open_count + closed_count,  # Total issues for template
+                'prs': 0  # We don't track PRs separately yet
             })
         
         # Ensure all configured repositories are included, even if they have no issues yet
         repo_stats_dict = {rs['repo']: rs for rs in repo_stats}
         for repo_name in REPOSITORIES:
             if repo_name not in repo_stats_dict:
-                repo_stats.append({
+                repo_stats_dict[repo_name] = {
                     'repo': repo_name,
                     'open_count': 0,
                     'closed_count': 0,
                     'new_24h': 0,
                     'updated_24h': 0,
-                    'last_updated': 'Never synced'
-                })
+                    'last_updated': 'Never synced',
+                    'issues': 0,
+                    'prs': 0
+                }
         
-        # Sort by open count descending
-        repo_stats.sort(key=lambda x: x['open_count'], reverse=True)
+        # Convert back to list for sorting, then back to dict
+        repo_stats_list = list(repo_stats_dict.values())
+        repo_stats_list.sort(key=lambda x: x['open_count'], reverse=True)
+        repo_stats_final = {rs['repo']: rs for rs in repo_stats_list}
         
         # Get issues with recent PR/mentions processing (if column exists)
         try:
@@ -1984,13 +1990,19 @@ def get_sync_statistics():
             'new_issues_24h': new_issues_24h,
             'updated_issues_24h': updated_issues_24h,
             'last_sync': last_sync_formatted,
+            'last_sync_formatted': last_sync_formatted,  # Template expects this
+            'in_progress': sync_status.get('sync_in_progress', False),  # Template expects this
             'sync_in_progress': sync_status.get('sync_in_progress', False),
+            'errors': len(sync_status.get('errors', [])),  # Template expects this
             'sync_errors': len(sync_status.get('errors', [])),
+            'error_details': '\n'.join(sync_status.get('errors', [])) if sync_status.get('errors') else None,
             'next_sync': sync_status.get('next_sync'),
-            'repo_stats': repo_stats,
+            'repo_stats': repo_stats_final,  # Now a dictionary as expected by template
             'processed_pr_mentions': processed_pr_mentions,
             'pr_processing_percentage': round(pr_processing_percentage, 1),
-            'repositories_count': len(REPOSITORIES)
+            'repositories_count': len(REPOSITORIES),
+            'repository_count': len(REPOSITORIES),  # Template expects this
+            'total_prs': 0  # Template expects this - we'll need to calculate this if needed
         }
         
     except Exception as e:
@@ -2006,13 +2018,19 @@ def get_default_sync_stats():
         'new_issues_24h': 0,
         'updated_issues_24h': 0,
         'last_sync': 'Never',
+        'last_sync_formatted': 'Never',  # Template expects this
+        'in_progress': False,  # Template expects this
         'sync_in_progress': False,
+        'errors': 0,  # Template expects this
         'sync_errors': 0,
+        'error_details': None,
         'next_sync': None,
-        'repo_stats': [],
+        'repo_stats': {},  # Empty dictionary as expected by template
         'processed_pr_mentions': 0,
         'pr_processing_percentage': 0,
-        'repositories_count': len(REPOSITORIES)
+        'repositories_count': len(REPOSITORIES),
+        'repository_count': len(REPOSITORIES),  # Template expects this
+        'total_prs': 0  # Template expects this
     }
 
 def get_sample_issues():
@@ -3167,6 +3185,111 @@ def _dashboard_internal(span=None):
             browser_nav_links += nav_link
             browser_count += issue_count
     
+    # Get sync statistics
+    sync_stats = get_sync_statistics()
+    
+    # Prepare template context
+    template_context = {
+        'selected_repo': selected_repo,
+        'repo_sections': repo_sections,
+        'sync_stats': sync_stats,
+        'nodejs_nav_links': nodejs_nav_links,
+        'python_nav_links': python_nav_links,
+        'browser_nav_links': browser_nav_links,
+        'dotnet_nav_links': dotnet_nav_links,
+        'java_nav_links': java_nav_links,
+        'nodejs_count': nodejs_count,
+        'python_count': python_count,
+        'browser_count': browser_count,
+        'dotnet_count': dotnet_count,
+        'java_count': java_count,
+        'current_state': show_state,
+        'group_counts_script': f'''
+        <script>
+            // Update navbar badge counts
+            document.getElementById('navbar-nodejs-count').textContent = '{nodejs_count}';
+            document.getElementById('navbar-python-count').textContent = '{python_count}';
+            document.getElementById('navbar-browser-count').textContent = '{browser_count}';
+            document.getElementById('navbar-dotnet-count').textContent = '{dotnet_count}';
+            document.getElementById('navbar-java-count').textContent = '{java_count}';
+            
+            // Set current state for state toggle functionality
+            window.currentState = '{show_state}';
+        </script>
+        '''
+    }
+    
+    # Render the dashboard template
+    return render_template('dashboard.html', **template_context)
+    repo_sections = ""
+    nodejs_nav_links = ""
+    python_nav_links = ""
+    browser_nav_links = ""
+    dotnet_nav_links = ""
+    java_nav_links = ""
+    
+    nodejs_count = 0
+    python_count = 0
+    browser_count = 0
+    dotnet_count = 0
+    java_count = 0
+    is_first = True
+    
+    # Get all configured repositories in sorted order (Azure, OpenTelemetry, Microsoft)
+    all_repositories = get_all_configured_repositories()
+    
+    # Generate repository sections for repos with data
+    for repo, repo_data in repo_groups.items():
+        repo_id = repo.replace('/', '-').replace('.', '-')
+        repo_sections += generate_repo_section(repo, repo_data, is_first, show_state, data_type)
+        is_first = False
+    
+    # Generate empty sections for repos without data in current state
+    for repo in all_repositories:
+        if repo not in repo_groups:
+            repo_sections += generate_empty_repo_section(repo, show_state, data_type)
+    
+    # Generate navigation links for ALL repositories (sorted by priority)
+    for repo in all_repositories:
+        repo_id = repo.replace('/', '-').replace('.', '-')
+        repo_name = repo.split('/')[-1]
+        
+        # Get issue count for this repo (0 if no issues)
+        issue_count = len(repo_groups.get(repo, []))
+        
+        color_class = get_repo_color_class(repo)
+        category = get_repo_category(repo)
+        
+        nav_link = f'''<a class="dropdown-item {color_class}" href="#" onclick="setActiveRepo('{repo_id}')" data-category="{category}">
+            <span class="nav-repo-name">{repo_name}</span>
+            <span class="badge badge-light ml-auto">{issue_count}</span>
+            <small class="category-indicator {color_class}">{category.upper()}</small>
+        </a>'''
+        
+        # Categorize by language
+        if repo in ['Azure/azure-sdk-for-python', 'open-telemetry/opentelemetry-python', 'open-telemetry/opentelemetry-python-contrib']:
+            python_nav_links += nav_link
+            python_count += issue_count
+        elif repo in ['Azure/azure-sdk-for-js', 'open-telemetry/opentelemetry-js', 'open-telemetry/opentelemetry-js-contrib',
+                      'microsoft/ApplicationInsights-node.js', 'microsoft/ApplicationInsights-node.js-native-metrics', 
+                      'microsoft/node-diagnostic-channel']:
+            nodejs_nav_links += nav_link
+            nodejs_count += issue_count
+        elif repo in ['Azure/azure-sdk-for-net', 'microsoft/ApplicationInsights-dotnet']:
+            dotnet_nav_links += nav_link
+            dotnet_count += issue_count
+        elif repo in ['open-telemetry/opentelemetry-dotnet']:
+            # OpenTelemetry .NET goes with other OpenTelemetry repos - determine based on primary language
+            # Since it's .NET, it makes sense to group with other .NET repos despite being OpenTelemetry
+            dotnet_nav_links += nav_link  
+            dotnet_count += issue_count
+        elif repo in ['open-telemetry/opentelemetry-java', 'microsoft/ApplicationInsights-Java']:
+            java_nav_links += nav_link
+            java_count += issue_count
+        else:
+            browser_nav_links += nav_link
+            browser_count += issue_count
+    
     # Handle completely empty state - when no repositories have been synced at all
     if not all_repositories:
         # If no repositories at all configured, show the full empty state
@@ -3657,141 +3780,22 @@ def update_issue():
 @app.route('/sync')
 @login_required
 def sync_page():
-    """Simple sync status page"""
-    return f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>GitHub Sync Status</title>
-    <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="30">
-    <style>
-        body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
-        .status {{ padding: 15px; margin: 10px 0; border-radius: 5px; }}
-        .success {{ background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }}
-        .warning {{ background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }}
-        .error {{ background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }}
-        .info {{ background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }}
-        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-        th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; }}
-        th {{ background: #f8f9fa; }}
-        .btn {{ padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }}
-        .btn:hover {{ background: #0056b3; }}
-        .btn:disabled {{ background: #6c757d; cursor: not-allowed; }}
-    </style>
-</head>
-<body>
-    <h1>🔄 GitHub Sync Status</h1>
+    """Sync management page using new template structure"""
+    # Get sync statistics
+    sync_stats = get_sync_statistics()
     
-    <div id="status">Loading...</div>
+    # Render the sync template
+    return render_template('sync.html', sync_stats=sync_stats)
+
+@app.route('/sync_all')
+@login_required
+def sync_all():
+    """Trigger sync and redirect to sync page"""
+    # Start sync in background
+    threading.Thread(target=sync_all_repositories, daemon=True).start()
     
-    <div style="margin: 20px 0;">
-        <button id="syncBtn" class="btn" onclick="triggerSync()">🚀 Trigger Manual Sync</button>
-        <button class="btn" onclick="location.reload()">🔄 Refresh</button>
-        <a href="/" class="btn" style="text-decoration: none; margin-left: 10px;">🏠 Back to Dashboard</a>
-    </div>
-    
-    <script>
-        function loadStatus() {{
-            fetch('/api/sync_status')
-                .then(response => response.json())
-                .then(data => {{
-                    updateStatusDisplay(data);
-                }})
-                .catch(error => {{
-                    document.getElementById('status').innerHTML = 
-                        '<div class="status error">❌ Error loading status: ' + error + '</div>';
-                }});
-        }}
-        
-        function updateStatusDisplay(data) {{
-            let html = '';
-            
-            if (!data.authenticated) {{
-                html += '<div class="status warning">⚠️ Running in unauthenticated mode (' + data.rate_limit + '). Add GITHUB_TOKEN for higher rate limits.</div>';
-            }} else {{
-                html += '<div class="status success">🔑 Authenticated mode (' + data.rate_limit + ')</div>';
-            }}
-            
-            if (data.sync_in_progress) {{
-                html += '<div class="status info">🔄 Sync in progress...</div>';
-            }} else if (data.last_sync) {{
-                const lastSync = new Date(data.last_sync);
-                html += '<div class="status success">✅ Last sync: ' + lastSync.toLocaleString() + '</div>';
-            }} else {{
-                html += '<div class="status warning">⚠️ No sync has been performed yet.</div>';
-            }}
-            
-            if (data.next_sync) {{
-                const nextSync = new Date(data.next_sync);
-                html += '<div class="status info">⏰ Next scheduled sync: ' + nextSync.toLocaleString() + '</div>';
-            }}
-            
-            if (data.total_synced > 0) {{
-                html += '<div class="status info">📊 Total issues synced: ' + data.total_synced + '</div>';
-            }}
-            
-            if (data.errors && data.errors.length > 0) {{
-                html += '<div class="status error">❌ Recent errors:<ul>';
-                data.errors.forEach(error => {{
-                    html += '<li>' + error + '</li>';
-                }});
-                html += '</ul></div>';
-            }}
-            
-            html += '<h3>📋 Repositories:</h3><table><tr><th>Repository</th><th>Status</th></tr>';
-            data.repositories.forEach(repo => {{
-                html += '<tr><td>' + repo + '</td><td>✅ Configured</td></tr>';
-            }});
-            html += '</table>';
-            
-            document.getElementById('status').innerHTML = html;
-            
-            // Update button state
-            const syncBtn = document.getElementById('syncBtn');
-            if (data.sync_in_progress) {{
-                syncBtn.disabled = true;
-                syncBtn.textContent = '🔄 Syncing...';
-            }} else {{
-                syncBtn.disabled = false;
-                const mode = data.authenticated ? 'Authenticated' : 'Unauthenticated';
-                syncBtn.textContent = '🚀 Trigger Manual Sync (' + mode + ')';
-            }}
-        }}
-        
-        function triggerSync() {{
-            const syncBtn = document.getElementById('syncBtn');
-            syncBtn.disabled = true;
-            syncBtn.textContent = '🔄 Starting...';
-            
-            fetch('/api/sync_now', {{ method: 'POST' }})
-                .then(response => response.json())
-                .then(data => {{
-                    if (data.status === 'success') {{
-                        alert('✅ Sync started in background!');
-                        setTimeout(loadStatus, 2000); // Reload status after 2 seconds
-                    }} else {{
-                        alert('❌ Error: ' + data.message);
-                        syncBtn.disabled = false;
-                        syncBtn.textContent = '🚀 Trigger Manual Sync';
-                    }}
-                }})
-                .catch(error => {{
-                    alert('❌ Network error: ' + error);
-                    syncBtn.disabled = false;
-                    syncBtn.textContent = '🚀 Trigger Manual Sync';
-                }});
-        }}
-        
-        // Load status on page load
-        loadStatus();
-        
-        // Auto-refresh every 30 seconds
-        setInterval(loadStatus, 30000);
-    </script>
-</body>
-</html>
-"""
+    # Redirect back to sync page with a message
+    return redirect(url_for('sync_page'))
 
 @app.route('/api/sync_status')
 @login_required

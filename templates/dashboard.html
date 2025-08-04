@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}GitHub Issues Dashboard{% endblock %}
+
+{% block content %}
+<!-- Global Data Type Toggle -->
+<div class="global-data-type-toggle">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-auto">
+                <div class="btn-group" role="group" aria-label="Data Type Toggle">
+                    <button type="button" class="btn btn-toggle-data-type" id="issues-toggle" onclick="toggleDataType('issues')">
+                        <i class="fas fa-exclamation-circle"></i> Issues
+                    </button>
+                    <button type="button" class="btn btn-toggle-data-type" id="prs-toggle" onclick="toggleDataType('prs')">
+                        <i class="fas fa-code-branch"></i> Pull Requests
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="main-container">
+    <!-- Intro page shown when no repo is selected -->
+    <div id="intro-page" class="intro-page">
+        <div class="intro-content">
+            <div class="intro-header">
+                <i class="fas fa-bug intro-icon"></i>
+                <h1>Azure Monitor TelReach GitHub Dashboard</h1>
+                <p class="intro-subtitle">Track and manage GitHub issues across Azure Monitor scripting SDKs</p>
+            </div>
+            
+            <div class="intro-stats">
+                <h3>Repository Overview</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-number" id="intro-nodejs-count">0</span>
+                        <span class="stat-label">Node.js Issues</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number" id="intro-python-count">0</span>
+                        <span class="stat-label">Python Issues</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number" id="intro-browser-count">0</span>
+                        <span class="stat-label">Browser JS Issues</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number text-success" id="intro-dotnet-count">0</span>
+                        <span class="stat-label">.NET Issues</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number text-danger" id="intro-java-count">0</span>
+                        <span class="stat-label">Java Issues</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number" id="intro-total-count">0</span>
+                        <span class="stat-label">Total Issues</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="intro-actions">
+                <div class="action-section">
+                    <h3>About This Project</h3>
+                    <p>This dashboard is built to help manage GitHub issues across Azure Monitor TelReach SDKs.</p>
+                    <a href="https://github.com/hectorhdzg/github-issues-dashboard" target="_blank" class="github-link">
+                        <i class="fab fa-github"></i>
+                        View on GitHub
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Repository Sections (dynamically generated) -->
+    {{ repo_sections | safe }}
+    
+    <!-- Group Counts Script (dynamically generated) -->
+    {{ group_counts_script | safe }}
+</div>
+
+<!-- Include Issue Modal Component -->
+{% include 'components/issue_modal.html' %}
+{% endblock %}
+
+{% block scripts %}
+<!-- Dashboard-specific JavaScript -->
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+
+<!-- Template Variables -->
+<script>
+    // Global variables from Flask template
+    var selectedRepoFromTemplate = '{{ selected_repo }}';
+    var syncStatsInProgress = {{ 'true' if sync_stats.in_progress else 'false' }};
+    var syncStatsErrors = {{ sync_stats.errors | default(0) }};
+</script>
+{% endblock %}

@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}Sync Statistics - GitHub Issues Dashboard{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-12">
+            <div class="sync-stats-section">
+                <div class="text-center mb-4">
+                    <h1><i class="fas fa-sync-alt"></i> Sync Statistics</h1>
+                    <p class="lead">Monitor GitHub data synchronization status and performance</p>
+                </div>
+
+                <!-- Sync Status Overview -->
+                <div class="sync-status-info">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="info-card">
+                                <h5><i class="fas fa-clock"></i> Last Sync</h5>
+                                <div class="sync-time">{{ sync_stats.last_sync_formatted or 'Never' }}</div>
+                                <div class="sync-status">
+                                    <span class="status-indicator {{ 'in-progress' if sync_stats.in_progress else ('error' if sync_stats.errors > 0 else '') }}"></span>
+                                    <span id="sync-status-text">
+                                        {% if sync_stats.in_progress %}
+                                            Sync in Progress...
+                                        {% elif sync_stats.errors > 0 %}
+                                            Ready ({{ sync_stats.errors }} errors)
+                                        {% else %}
+                                            Ready
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="info-card">
+                                <h5><i class="fas fa-chart-line"></i> Sync Performance</h5>
+                                <div class="mb-2">
+                                    <strong>Total Issues Synced:</strong> {{ sync_stats.total_issues or 0 }}
+                                </div>
+                                <div class="mb-2">
+                                    <strong>Total PRs Synced:</strong> {{ sync_stats.total_prs or 0 }}
+                                </div>
+                                <div>
+                                    <strong>Repositories:</strong> {{ sync_stats.repository_count or 0 }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Repository Statistics -->
+                {% if sync_stats.repo_stats %}
+                <div class="repo-stats-table">
+                    <h5><i class="fas fa-database"></i> Repository Breakdown</h5>
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Repository</th>
+                                    <th>Issues</th>
+                                    <th>Pull Requests</th>
+                                    <th>Last Updated</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for repo_name, stats in sync_stats.repo_stats.items() %}
+                                <tr>
+                                    <td>
+                                        <span class="repo-name">{{ repo_name }}</span>
+                                    </td>
+                                    <td>
+                                        <span class="badge badge-primary">{{ stats.issues or 0 }}</span>
+                                    </td>
+                                    <td>
+                                        <span class="badge badge-info">{{ stats.prs or 0 }}</span>
+                                    </td>
+                                    <td>
+                                        {{ stats.last_updated or 'Never' }}
+                                    </td>
+                                    <td>
+                                        {% if stats.error %}
+                                            <span class="badge badge-danger">
+                                                <i class="fas fa-exclamation-triangle"></i> Error
+                                            </span>
+                                        {% else %}
+                                            <span class="badge badge-success">
+                                                <i class="fas fa-check"></i> OK
+                                            </span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Action Buttons -->
+                <div class="text-center mt-4">
+                    <a href="{{ url_for('sync_all') }}" class="btn btn-primary btn-lg" 
+                       {% if sync_stats.in_progress %}disabled{% endif %}>
+                        <i class="fas fa-sync-alt"></i> 
+                        {% if sync_stats.in_progress %}Syncing...{% else %}Sync Now{% endif %}
+                    </a>
+                    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary btn-lg ml-2">
+                        <i class="fas fa-arrow-left"></i> Back to Dashboard
+                    </a>
+                </div>
+
+                <!-- Error Details (if any) -->
+                {% if sync_stats.error_details %}
+                <div class="mt-4">
+                    <h5><i class="fas fa-exclamation-triangle text-danger"></i> Error Details</h5>
+                    <div class="alert alert-danger">
+                        <pre>{{ sync_stats.error_details }}</pre>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-refresh page every 30 seconds if sync is in progress
+    {% if sync_stats.in_progress %}
+    setTimeout(() => {
+        window.location.reload();
+    }, 30000);
+    {% endif %}
+    
+    // Update sync status indicators
+    function updateSyncStatus() {
+        const syncInProgress = {{ 'true' if sync_stats.in_progress else 'false' }};
+        const syncErrors = {{ sync_stats.errors or 0 }};
+        const statusIndicator = document.querySelector('.status-indicator');
+        const statusText = document.getElementById('sync-status-text');
+        
+        if (statusIndicator && statusText) {
+            if (syncInProgress) {
+                statusIndicator.className = 'status-indicator in-progress';
+                statusText.textContent = 'Sync in Progress...';
+                statusText.style.color = '#ed8936';
+            } else if (syncErrors > 0) {
+                statusIndicator.className = 'status-indicator error';
+                statusText.textContent = `Ready (${syncErrors} errors)`;
+                statusText.style.color = '#f56565';
+            } else {
+                statusIndicator.className = 'status-indicator';
+                statusText.textContent = 'Ready';
+                statusText.style.color = '#48bb78';
+            }
+        }
+    }
+    
+    // Call on page load
+    document.addEventListener('DOMContentLoaded', updateSyncStatus);
+</script>
+{% endblock %}

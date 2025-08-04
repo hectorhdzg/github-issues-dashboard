@@ -27,6 +27,7 @@
             max-width: 1800px;
             margin: 0 auto;
             padding: 20px;
+            margin-top: 140px; /* Increased to account for navbar (~72px) + toggle (~50px) + spacing */
         }
         
         /* Custom navbar styles */
@@ -139,37 +140,67 @@
         
         /* Global Data Type Toggle */
         .global-data-type-toggle {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 10px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+            background: #000000 !important; /* Pure black background for debugging */
+            padding: 20px 0; /* Increased padding for more visibility */
+            border-bottom: 5px solid #ff0000; /* Bright red border for visibility */
+            border-top: 5px solid #ff0000; /* Bright red top border */
             position: fixed;
-            top: 56px; /* Position right below the navbar */
+            top: 72px; /* Increased from 56px to account for taller navbar */
             left: 0;
             right: 0;
-            z-index: 1029; /* Below navbar but above content */
+            z-index: 9999 !important; /* Much higher z-index to ensure it's on top */
+            box-shadow: 0 4px 12px rgba(255,0,0,0.5); /* Red shadow for visibility */
+            display: block !important;
+            visibility: visible !important;
+            min-height: 80px !important; /* Larger minimum height */
+            opacity: 1 !important; /* Force full opacity */
+        }
+        
+        .global-data-type-toggle .container {
+            max-width: 1200px;
+        }
+        
+        .global-data-type-toggle .btn-group {
+            display: flex !important;
+            justify-content: center;
         }
         
         .btn-toggle-data-type {
-            background-color: rgba(255,255,255,0.2);
-            border: 1px solid rgba(255,255,255,0.3);
-            color: rgba(255,255,255,0.9);
-            padding: 8px 16px;
-            margin: 0 2px;
-            border-radius: 20px;
+            background-color: #ff0000 !important; /* Bright red background for visibility */
+            border: 5px solid #ffffff !important; /* White border for high contrast */
+            color: #ffffff !important; /* White text for contrast */
+            padding: 20px 30px !important; /* Much larger padding */
+            margin: 0 10px !important; /* More spacing between buttons */
+            border-radius: 10px !important; /* Less rounded for better visibility */
             transition: all 0.3s ease;
+            font-weight: 900 !important; /* Maximum bold */
+            font-size: 22px !important; /* Much larger text */
+            display: inline-block !important;
+            visibility: visible !important;
+            cursor: pointer;
+            min-width: 180px !important; /* Much wider buttons */
+            text-align: center;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8) !important; /* Strong text shadow */
+            box-shadow: 0 4px 8px rgba(255,255,255,0.5) !important; /* White shadow for visibility */
         }
         
         .btn-toggle-data-type:hover {
-            background-color: rgba(255,255,255,0.3);
-            color: white;
-            transform: translateY(-1px);
+            background-color: #ffffff !important; /* White background on hover */
+            color: #000000 !important; /* Black text on hover */
+            transform: translateY(-5px) !important; /* More pronounced hover effect */
+            border-color: #000000 !important; /* Black border on hover */
+            text-decoration: none;
+            box-shadow: 0 8px 16px rgba(255,255,255,0.8) !important; /* White shadow on hover */
         }
         
         .btn-toggle-data-type.active {
-            background-color: white;
-            color: #667eea;
-            font-weight: 600;
-            border-color: white;
+            background-color: #00ff00 !important; /* Bright green for active state */
+            color: #000000 !important; /* Black text for active */
+            font-weight: 900 !important;
+            border-color: #ffffff !important; /* White border for active */
+            box-shadow: 0 8px 20px rgba(0,255,0,0.6) !important; /* Green glow for active */
+            transform: scale(1.1) !important; /* Much larger when active */
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8) !important; /* Strong shadow for active */
         }
         
         .btn-toggle-data-type i {
@@ -1822,7 +1853,7 @@
         // Modal-related variables
         let currentModalIssue = null;
         
-        // Function to open issue modal from data attribute (safer approach)
+        // Function to open modal from data attribute (handles both issues and PRs)
         function openIssueModalFromData(button) {
             try {
                 const modalDataJson = button.getAttribute('data-modal-data');
@@ -1837,23 +1868,28 @@
                 const modalData = JSON.parse(unescapedJson);
                 console.log('Parsed modal data:', modalData);
                 
-                openIssueModal(
-                    modalData.repo,
-                    modalData.number, 
-                    modalData.title,
-                    modalData.htmlUrl,
-                    modalData.body,
-                    modalData.triage,
-                    modalData.priority,
-                    modalData.comments,
-                    modalData.assignees,
-                    modalData.labels,
-                    modalData.mentions
-                );
+                // Route to appropriate modal based on data type
+                if (modalData.dataType === 'prs') {
+                    openPullRequestModal(modalData);
+                } else {
+                    openIssueModal(
+                        modalData.repo,
+                        modalData.number, 
+                        modalData.title,
+                        modalData.htmlUrl,
+                        modalData.body,
+                        modalData.triage,
+                        modalData.priority,
+                        modalData.comments,
+                        modalData.assignees,
+                        modalData.labels,
+                        modalData.mentions
+                    );
+                }
             } catch (error) {
                 console.error('Error parsing modal data:', error);
                 console.error('Modal data JSON:', button.getAttribute('data-modal-data'));
-                alert('Error opening issue details. Please refresh the page and try again.');
+                alert('Error opening details. Please refresh the page and try again.');
             }
         }
         
@@ -1876,6 +1912,9 @@
                 mentions: mentions
             };
             
+            // Update modal title for issues
+            document.getElementById('issueModalLabel').innerHTML = '<i class="fas fa-bug"></i> Issue Details';
+            
             // Populate modal fields
             document.getElementById('modal-issue-number').textContent = '#' + number;
             document.getElementById('modal-github-link').href = htmlUrl;
@@ -1892,11 +1931,16 @@
                 bodyElement.style.fontStyle = 'italic';
             }
             
+            // Show issue-specific fields and hide PR-specific fields
+            hideIssueSpecificFields(false); // Show issue fields
+            hidePRSpecificFields(true);     // Hide PR fields
+            
             document.getElementById('modal-triage').checked = triage == 1;
             document.getElementById('modal-priority').value = priority;
             document.getElementById('modal-comments').value = comments || '';
             
-            // Populate context information
+            // Populate context information (make sure issue sections are visible)
+            document.getElementById('modal-assignees-section').style.display = 'block';
             console.log('Populating assignees:', assignees);
             populateAssignees(assignees);
             console.log('Populating labels:', labels);
@@ -1904,11 +1948,81 @@
             console.log('Populating mentions:', mentions);
             populateMentions(mentions);
             
-            // Reset save button state
+            // Reset save button state for issues
             const saveBtn = document.getElementById('modal-save-btn');
+            saveBtn.style.display = 'inline-block';  // Show save button for issues
             saveBtn.disabled = false;
             saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
             saveBtn.className = 'btn btn-success';
+            
+            // Show modal
+            $('#issueModal').modal('show');
+        }
+
+        // Function to open pull request modal
+        function openPullRequestModal(modalData) {
+            console.log('Opening PR modal with data:', modalData);
+            
+            // Store current PR data
+            currentModalIssue = {
+                repo: modalData.repo,
+                number: modalData.number,
+                title: modalData.title,
+                htmlUrl: modalData.htmlUrl,
+                body: modalData.body,
+                dataType: modalData.dataType,
+                author: modalData.author,
+                reviewers: modalData.reviewers,
+                status: modalData.status,
+                draft: modalData.draft,
+                merged: modalData.merged,
+                baseRef: modalData.baseRef,
+                headRef: modalData.headRef,
+                labels: modalData.labels,
+                mentions: modalData.mentions,
+                comments: modalData.comments
+            };
+            
+            // Update modal title and type indicator
+            document.getElementById('issueModalLabel').innerHTML = '<i class="fas fa-code-branch"></i> Pull Request Details';
+            
+            // Populate modal fields
+            document.getElementById('modal-issue-number').textContent = '#' + modalData.number;
+            document.getElementById('modal-github-link').href = modalData.htmlUrl;
+            document.getElementById('modal-issue-title').textContent = modalData.title;
+            
+            // Populate PR body/description
+            const bodyElement = document.getElementById('modal-issue-body');
+            if (modalData.body && modalData.body.trim()) {
+                bodyElement.textContent = modalData.body;
+                bodyElement.style.color = '#333';
+            } else {
+                bodyElement.textContent = 'No description provided.';
+                bodyElement.style.color = '#999';
+                bodyElement.style.fontStyle = 'italic';
+            }
+            
+            // Hide issue-specific fields and show PR-specific fields
+            hideIssueSpecificFields(true);  // Hide issue fields
+            hidePRSpecificFields(false);     // Show PR fields
+            
+            // Populate PR-specific information
+            populatePRAuthor(modalData.author);
+            populatePRReviewers(modalData.reviewers);
+            populatePRStatus(modalData.status, modalData.draft, modalData.merged);
+            populatePRBranches(modalData.baseRef, modalData.headRef);
+            
+            // Populate common information for PRs (show in PR common section)
+            document.getElementById('modal-pr-common-section').style.display = 'block';
+            populatePRLabels(modalData.labels);
+            populatePRMentions(modalData.mentions);
+            
+            // Set comments
+            document.getElementById('modal-comments').value = modalData.comments || '';
+            
+            // Hide save button for PRs (they're read-only for now)
+            const saveBtn = document.getElementById('modal-save-btn');
+            saveBtn.style.display = 'none';
             
             // Show modal
             $('#issueModal').modal('show');
@@ -1996,6 +2110,146 @@
             ).join('');
             
             container.innerHTML = mentionLinks;
+        }
+
+        // Helper functions for PR-specific data
+        function populatePRAuthor(author) {
+            const container = document.getElementById('modal-pr-author');
+            if (!container) return; // Container doesn't exist yet
+            
+            if (!author) {
+                container.innerHTML = '<span class="text-muted">Unknown</span>';
+                return;
+            }
+            
+            container.innerHTML = `<a href="https://github.com/${author}" target="_blank" class="badge badge-primary">
+                <i class="fas fa-user"></i> ${author}
+            </a>`;
+        }
+
+        function populatePRReviewers(reviewers) {
+            const container = document.getElementById('modal-pr-reviewers');
+            if (!container) return; // Container doesn't exist yet
+            
+            if (!reviewers || reviewers.length === 0) {
+                container.innerHTML = '<span class="text-muted">No reviewers</span>';
+                return;
+            }
+            
+            const reviewerLinks = reviewers.map(reviewer => 
+                `<a href="https://github.com/${reviewer}" target="_blank" class="badge badge-info mr-1">
+                    <i class="fas fa-user-check"></i> ${reviewer}
+                 </a>`
+            ).join('');
+            
+            container.innerHTML = reviewerLinks;
+        }
+
+        function populatePRStatus(status, draft, merged) {
+            const container = document.getElementById('modal-pr-status');
+            if (!container) return; // Container doesn't exist yet
+            
+            let statusBadge = '';
+            if (merged) {
+                statusBadge = '<span class="badge badge-success"><i class="fas fa-check"></i> Merged</span>';
+            } else if (draft) {
+                statusBadge = '<span class="badge badge-secondary"><i class="fas fa-pencil-alt"></i> Draft</span>';
+            } else if (status === 'open') {
+                statusBadge = '<span class="badge badge-success"><i class="fas fa-exclamation-circle"></i> Open</span>';
+            } else if (status === 'closed') {
+                statusBadge = '<span class="badge badge-danger"><i class="fas fa-times"></i> Closed</span>';
+            } else {
+                statusBadge = `<span class="badge badge-secondary">${status}</span>`;
+            }
+            
+            container.innerHTML = statusBadge;
+        }
+
+        function populatePRBranches(baseRef, headRef) {
+            const container = document.getElementById('modal-pr-branches');
+            if (!container) return; // Container doesn't exist yet
+            
+            if (!baseRef && !headRef) {
+                container.innerHTML = '<span class="text-muted">No branch information</span>';
+                return;
+            }
+            
+            const baseDisplay = baseRef ? `<span class="badge badge-light mr-1"><i class="fas fa-code-branch"></i> ${baseRef}</span>` : '';
+            const arrow = (baseRef && headRef) ? '<i class="fas fa-arrow-left mx-1"></i>' : '';
+            const headDisplay = headRef ? `<span class="badge badge-info"><i class="fas fa-code-branch"></i> ${headRef}</span>` : '';
+            
+            container.innerHTML = `${headDisplay}${arrow}${baseDisplay}`;
+        }
+
+        function populatePRLabels(labels) {
+            const container = document.getElementById('modal-pr-labels');
+            if (!container) return; // Container doesn't exist yet
+            
+            if (!labels || labels.length === 0) {
+                container.innerHTML = '<span class="text-muted">None</span>';
+                return;
+            }
+            
+            const labelBadges = labels.map(label => {
+                const color = label.color || 'cccccc';
+                // Calculate text color based on background brightness
+                const r = parseInt(color.substr(0, 2), 16);
+                const g = parseInt(color.substr(2, 2), 16);
+                const b = parseInt(color.substr(4, 2), 16);
+                const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+                const textColor = brightness > 128 ? '#000000' : '#ffffff';
+                
+                return `<span class="badge mr-1" style="background-color: #${color}; color: ${textColor}; font-size: 0.75rem;" title="${label.description || ''}">
+                    ${label.name}
+                </span>`;
+            }).join('');
+            
+            container.innerHTML = labelBadges;
+        }
+
+        function populatePRMentions(mentions) {
+            const container = document.getElementById('modal-pr-mentions');
+            if (!container) return; // Container doesn't exist yet
+            
+            if (!mentions || mentions.length === 0) {
+                container.innerHTML = '<span class="text-muted">None</span>';
+                return;
+            }
+            
+            const mentionLinks = mentions.map(mention => 
+                `<a href="https://github.com/${mention}" target="_blank" class="badge badge-info mr-1">
+                    <i class="fas fa-at"></i> ${mention}
+                 </a>`
+            ).join('');
+            
+            container.innerHTML = mentionLinks;
+        }
+
+        function hideIssueSpecificFields(hide) {
+            const elements = [
+                document.getElementById('modal-triage-section'),
+                document.getElementById('modal-priority-section'),
+                document.getElementById('modal-assignees-section')
+            ];
+            
+            elements.forEach(element => {
+                if (element) {
+                    element.style.display = hide ? 'none' : 'block';
+                }
+            });
+        }
+
+        function hidePRSpecificFields(hide) {
+            const elements = [
+                document.getElementById('modal-pr-author-section'),
+                document.getElementById('modal-pr-common-section')
+            ];
+            
+            elements.forEach(element => {
+                if (element) {
+                    element.style.display = hide ? 'none' : 'block';
+                }
+            });
         }
         
         // Function to save modal changes
@@ -2399,9 +2653,10 @@
                             </div>
                         </div>
                         
-                        <!-- Issue Context Information -->
+                        <!-- Context Information -->
                         <div class="mb-4 modal-context-info">
-                            <div class="row">
+                            <!-- Issue-specific fields -->
+                            <div id="modal-assignees-section" class="row mb-3">
                                 <div class="col-md-4">
                                     <label class="font-weight-bold text-muted">
                                         <i class="fas fa-users"></i> Assignees
@@ -2427,11 +2682,68 @@
                                     </div>
                                 </div>
                             </div>
+                            
+                            <!-- PR-specific fields -->
+                            <div id="modal-pr-author-section" class="row mb-3" style="display: none;">
+                                <div class="col-md-3">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-user"></i> Author
+                                    </label>
+                                    <div id="modal-pr-author" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-user-check"></i> Reviewers
+                                    </label>
+                                    <div id="modal-pr-reviewers" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-info-circle"></i> Status
+                                    </label>
+                                    <div id="modal-pr-status" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-code-branch"></i> Branches
+                                    </label>
+                                    <div id="modal-pr-branches" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Common fields for PRs -->
+                            <div id="modal-pr-common-section" class="row" style="display: none;">
+                                <div class="col-md-6">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-tags"></i> Labels
+                                    </label>
+                                    <div id="modal-pr-labels" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="font-weight-bold text-muted">
+                                        <i class="fas fa-at"></i> Mentions
+                                    </label>
+                                    <div id="modal-pr-mentions" class="mt-1 text-muted">
+                                        Not loaded
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         
                         <hr class="mb-4">
                         
-                        <div class="row">
+                        <!-- Issue-specific sections -->
+                        <div id="modal-triage-section" class="row">
                             <div class="col-md-6">
                                 <div class="form-group">
                                     <label for="modal-triage" class="font-weight-bold">
@@ -2443,7 +2755,7 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="col-md-6">
+                            <div id="modal-priority-section" class="col-md-6">
                                 <div class="form-group">
                                     <label for="modal-priority" class="font-weight-bold">
                                         <i class="fas fa-exclamation-triangle"></i> Priority
