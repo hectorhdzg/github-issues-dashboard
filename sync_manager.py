@@ -16,20 +16,11 @@ from urllib.parse import unquote, quote
 
 # Import timezone support with fallback
 try:
-    from zoneinfo import ZoneInfo
-    PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
+    import pytz
+    PACIFIC_TZ = pytz.timezone("America/Los_Angeles")
 except ImportError:
-    # Fallback for Python < 3.9
-    try:
-        import pytz
-        PACIFIC_TZ = pytz.timezone("America/Los_Angeles")
-    except ImportError:
-        # If neither is available, use a simple UTC offset approximation
-        from datetime import timedelta
-        class SimplePacificTZ(timezone):
-            def __init__(self):
-                super().__init__(timedelta(hours=-8), "Pacific")
-        PACIFIC_TZ = SimplePacificTZ()
+    # Fallback to UTC for testing
+    PACIFIC_TZ = timezone.utc
 
 class GitHubSyncManager:
     """Manages GitHub data synchronization"""

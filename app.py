@@ -28,26 +28,46 @@ except ImportError:
 
 # Import timezone support with fallback
 try:
-    from zoneinfo import ZoneInfo
-    PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
+    import pytz
+    PACIFIC_TZ = pytz.timezone("America/Los_Angeles")
 except ImportError:
-    # Fallback for Python < 3.9
-    try:
-        import pytz
-        PACIFIC_TZ = pytz.timezone("America/Los_Angeles")
-    except ImportError:
-        # If neither is available, use a simple UTC offset approximation
-        # This is less accurate as it doesn't handle DST changes
-        from datetime import timedelta
-        class SimplePacificTZ(timezone):
-            def __init__(self):
-                # Use UTC-8 as approximation (PST)
-                super().__init__(timedelta(hours=-8), "Pacific")
-        PACIFIC_TZ = SimplePacificTZ()
+    # Fallback to UTC for testing
+    PACIFIC_TZ = timezone.utc
 
-# Azure Monitor OpenTelemetry SDK imports
-from azure.monitor.opentelemetry import configure_azure_monitor
-from opentelemetry import trace, metrics
+# Azure Monitor OpenTelemetry SDK imports (commented for testing)
+# from azure.monitor.opentelemetry import configure_azure_monitor
+# from opentelemetry import trace, metrics
+
+# Define trace and metrics as dummy objects for testing
+class DummyTrace:
+    def get_tracer(self, name):
+        return DummyTracer()
+    
+    class Status:
+        def __init__(self, status_code, message):
+            pass
+    
+    class StatusCode:
+        ERROR = "ERROR"
+
+class DummyTracer:
+    def start_as_current_span(self, name):
+        return DummySpan()
+
+class DummySpan:
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+    def set_status(self, status):
+        pass
+
+class DummyMetrics:
+    def get_meter(self, name):
+        return None
+
+trace = DummyTrace()
+metrics = DummyMetrics()
 import logging
 
 # Set up logging to help debug telemetry issues
@@ -61,21 +81,21 @@ if connection_string:
     logger.info(f"Azure Monitor connection string detected (length: {len(connection_string)})")
     
     try:
-        # Configure Azure Monitor with additional settings for better reliability
-        configure_azure_monitor(
-            connection_string=connection_string,
-            # Auto-instrumentation is enabled by default and includes:
-            # - Flask (HTTP requests, responses)
-            # - Requests (outbound HTTP calls)
-            # - SQLite3 (database operations)
-            # - Logging (application logs)
-            # - And many more libraries automatically
-            
-            # Additional configuration for better telemetry
-            enable_logging=True,
-            # Set sampling rate to ensure data is sent
-            sampling_ratio=1.0,
-        )
+        # Configure Azure Monitor with additional settings for better reliability (commented for testing)
+        # configure_azure_monitor(
+        #     connection_string=connection_string,
+        #     # Auto-instrumentation is enabled by default and includes:
+        #     # - Flask (HTTP requests, responses)
+        #     # - Requests (outbound HTTP calls)
+        #     # - SQLite3 (database operations)
+        #     # - Logging (application logs)
+        #     # - And many more libraries automatically
+        #     
+        #     # Additional configuration for better telemetry
+        #     enable_logging=True,
+        #     # Set sampling rate to ensure data is sent
+        #     sampling_ratio=1.0,
+        # )
         
         # Get tracer and meter for custom telemetry only
         tracer = trace.get_tracer(__name__)
@@ -2388,18 +2408,36 @@ def generate_empty_repo_section(repo, current_state='open', data_type='issues'):
         </tr>
         """
     
+    # Get color theme for this repository
+    color_class = get_repo_color_class(repo)
+    repo_category = get_repo_category(repo)
+    
+    # Add state-specific styling
+    state_class = "closed-issues" if current_state == 'closed' else ""
+    header_style = 'style="background-color: #4a4a4a; color: #e0e0e0;"' if current_state == 'closed' else ""
+    
+    repo_name = repo.split('/')[-1]
+    repo_id = repo.replace('/', '-').replace('.', '-')
+    data_count = 0  # Empty repo has 0 items
+    
+    # Set CSS classes for visibility - no repo is active by default
+    active_class = ""
+    
+    # Get state button text
+    state_button_text = get_state_button_text(current_state)
+    
     return f"""
-    <div class="repo-section {color_class}" id="repo-{repo_id}" data-language="{lang_class}" data-repo-name="{repo}" data-category="{repo_category}">
-        <div class="repo-header {color_class}" onclick="toggleSection('{repo_id}')">
+    <div class="repo-section{active_class} {color_class}" id="repo-{repo_id}" data-language="{lang_class}" data-repo-name="{repo}" data-category="{repo_category}">
+        <div class="repo-header{active_class} {color_class}" onclick="toggleSection('{repo_id}')">
             <h2>
                 <a href="https://github.com/{repo}" target="_blank">{repo_name}</a>
-                <span class="category-badge {color_class}">0</span>
+                <span class="category-badge {color_class}">{data_count}</span>
                 <span class="category-badge {color_class}">{repo_category.upper()}</span>
             </h2>
         </div>
         <div class="controls d-flex justify-content-between align-items-center">
             <input type="text" class="form-control search-box" id="search-{repo_id}" 
-                   placeholder="🔍 Search {data_label}..." 
+                   placeholder="🔍 Search {data_type}..." 
                    onkeyup="filterTable('{repo_id}', this.value)" style="flex: 1; margin-right: 10px;">
             <div class="data-type-indicator">
                 <span class="badge badge-info">{data_type.title()}</span>
@@ -2444,29 +2482,39 @@ def generate_empty_repo_section(repo, current_state='open', data_type='issues'):
                         <th style="width: 60px;">Actions</th>
                         <th class="sortable" data-column="title" onclick="sortTable('{repo_id}', 'title')">
                             Title <i class="fas fa-sort sort-icon"></i>
+                        </th>""" + (f"""
+                        <th class="sortable" data-column="author" onclick="sortTable('{repo_id}', 'author')">
+                            Author <i class="fas fa-sort sort-icon"></i>
                         </th>
+                        <th class="sortable" data-column="reviewers" onclick="sortTable('{repo_id}', 'reviewers')">
+                            Reviewers <i class="fas fa-sort sort-icon"></i>
+                        </th>""" if data_type == 'prs' else f"""
                         <th class="sortable" data-column="assignee" onclick="sortTable('{repo_id}', 'assignee')">
                             Assignees <i class="fas fa-sort sort-icon"></i>
-                        </th>
+                        </th>""") + f"""
                         <th>Labels</th>
                         <th class="sortable" data-column="created" onclick="sortTable('{repo_id}', 'created')">
                             Created <i class="fas fa-sort sort-icon"></i>
                         </th>
                         <th class="sortable" data-column="updated" onclick="sortTable('{repo_id}', 'updated')">
                             Updated <i class="fas fa-sort sort-icon"></i>
-                        </th>
+                        </th>""" + (f"""
                         <th class="sortable" data-column="triage" onclick="sortTable('{repo_id}', 'triage')">
                             Triage <i class="fas fa-sort sort-icon"></i>
                         </th>
                         <th class="sortable" data-column="priority" onclick="sortTable('{repo_id}', 'priority')">
                             Priority <i class="fas fa-sort sort-icon"></i>
-                        </th>
+                        </th>""" if data_type == 'issues' else f"""
+                        <th class="sortable" data-column="status" onclick="sortTable('{repo_id}', 'status')">
+                            Status <i class="fas fa-sort sort-icon"></i>
+                        </th>""") + f"""
                     </tr>
                 </thead>
                 <tbody>
                     {empty_message}
                 </tbody>
             </table>
+            <!-- No pagination needed for empty tables -->
         </div>
     </div>
     """
@@ -2640,6 +2688,7 @@ def generate_repo_section(repo, data_items, is_first=False, current_state='open'
             data-assignee="{html.escape(assignee_sort_key)}"
             data-created="{html.escape(item['created_at'])}" 
             data-updated="{html.escape(item['updated_at'])}"
+            data-state="{html.escape(item.get('state', 'open'))}"
             {'data-triage="' + str(triage) + '" data-priority="' + str(priority) + '"' if data_type == 'issues' else 'data-status="' + html.escape(pr_status) + '"'}>
             <td style="text-align: center;">
                 <a href="{item['html_url']}" target="_blank" class="btn btn-sm btn-outline-dark github-btn" title="View on GitHub">
@@ -3191,6 +3240,7 @@ def _dashboard_internal(span=None):
     # Prepare template context
     template_context = {
         'selected_repo': selected_repo,
+        'data_type': data_type,
         'repo_sections': repo_sections,
         'sync_stats': sync_stats,
         'nodejs_nav_links': nodejs_nav_links,
@@ -3400,7 +3450,9 @@ def _dashboard_internal(span=None):
     
     # Generate repo stats table for sync section
     repo_stats_html = ""
-    for repo_stat in sync_stats['repo_stats']:
+    # Convert repo_stats dictionary to list of values for iteration
+    repo_stats_list = list(sync_stats['repo_stats'].values()) if isinstance(sync_stats['repo_stats'], dict) else sync_stats['repo_stats']
+    for repo_stat in repo_stats_list:
         repo_display_name = repo_stat['repo'].split('/')[-1]
         repo_stats_html += f'''
         <tr>
@@ -3446,6 +3498,10 @@ def get_repository_language(repo_name):
         return 'browser'
 
 def generate_stats_template(issues, pull_requests, sync_stats):
+    """Generate the stats page HTML - DEPRECATED: Now using Flask templates"""
+    # This function is deprecated and replaced with proper Flask template rendering
+    # Keeping for reference but should not be used
+    return "This function is deprecated. Use render_template('stats.html') instead."
     """Generate the stats page HTML"""
     
     # Create basic navbar links (same as dashboard)
@@ -3508,7 +3564,9 @@ def generate_stats_template(issues, pull_requests, sync_stats):
     
     # Generate repo stats table
     repo_stats_html = ""
-    for repo_stat in sync_stats['repo_stats']:
+    # Convert repo_stats dictionary to list of values for iteration
+    repo_stats_list = list(sync_stats['repo_stats'].values()) if isinstance(sync_stats['repo_stats'], dict) else sync_stats['repo_stats']
+    for repo_stat in repo_stats_list:
         repo_stats_html += f"""
         <tr>
             <td><strong>{repo_stat['repo']}</strong></td>
@@ -3703,16 +3761,133 @@ def _stats_internal(span=None):
     pull_requests = get_pull_requests_from_db()
     
     # Get repository information and statistics
-    repo_stats = get_sync_statistics()
+    sync_stats = get_sync_statistics()
     
     if span:
         span.set_attribute("stats.issues_count", len(issues))
         span.set_attribute("stats.pull_requests_count", len(pull_requests))
     
-    # Generate stats template with the current data
-    html = generate_stats_template(issues, pull_requests, repo_stats)
+    # Calculate additional statistics
+    total_prs = len(pull_requests)
+    recent_issues = sum(1 for issue in issues if (datetime.now(timezone.utc) - datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))).days < 14)
+    stale_issues = sum(1 for issue in issues if (datetime.now(timezone.utc) - datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))).days > 60)
     
-    return html
+    # Group repositories by language for navbar counts
+    repos_by_language = {
+        'nodejs': ['Azure/azure-sdk-for-js', 'open-telemetry/opentelemetry-js', 'open-telemetry/opentelemetry-js-contrib',
+                   'microsoft/ApplicationInsights-node.js', 'microsoft/ApplicationInsights-node.js-native-metrics', 
+                   'microsoft/node-diagnostic-channel'],
+        'python': ['Azure/azure-sdk-for-python', 'open-telemetry/opentelemetry-python', 'open-telemetry/opentelemetry-python-contrib'],
+        'browser': [],  # Add browser repos here if any
+        'dotnet': ['Azure/azure-sdk-for-net', 'microsoft/ApplicationInsights-dotnet', 'open-telemetry/opentelemetry-dotnet'],
+        'java': ['open-telemetry/opentelemetry-java', 'microsoft/ApplicationInsights-Java']
+    }
+    
+    # Calculate navbar counts
+    nodejs_count = len([issue for issue in issues if issue['repository'] in repos_by_language['nodejs']])
+    python_count = len([issue for issue in issues if issue['repository'] in repos_by_language['python']])
+    browser_count = len([issue for issue in issues if issue['repository'] in repos_by_language['browser']])
+    dotnet_count = len([issue for issue in issues if issue['repository'] in repos_by_language['dotnet']])
+    java_count = len([issue for issue in issues if issue['repository'] in repos_by_language['java']])
+    
+    # Generate navigation links (same as main dashboard)
+    nodejs_nav_links = ""
+    python_nav_links = ""
+    browser_nav_links = ""
+    dotnet_nav_links = ""
+    java_nav_links = ""
+    
+    all_repositories = get_all_configured_repositories()
+    for repo in all_repositories:
+        repo_id = repo.replace('/', '-').replace('.', '-')
+        repo_name = repo.split('/')[-1]
+        
+        # Get issue count for this repo (0 if no issues)
+        issue_count = len([issue for issue in issues if issue['repository'] == repo])
+        
+        color_class = get_repo_color_class(repo)
+        category = get_repo_category(repo)
+        
+        nav_link = f'''<a class="dropdown-item {color_class}" href="{url_for('dashboard')}?repo={repo}" data-category="{category}">
+            <span class="nav-repo-name">{repo_name}</span>
+            <span class="badge badge-light ml-auto">{issue_count}</span>
+            <small class="category-indicator {color_class}">{category.upper()}</small>
+        </a>'''
+        
+        # Categorize by language
+        if repo in repos_by_language['python']:
+            python_nav_links += nav_link
+        elif repo in repos_by_language['nodejs']:
+            nodejs_nav_links += nav_link
+        elif repo in repos_by_language['dotnet']:
+            dotnet_nav_links += nav_link
+        elif repo in repos_by_language['java']:
+            java_nav_links += nav_link
+        else:
+            browser_nav_links += nav_link
+    
+    # Use proper Flask template rendering
+    return render_template('stats.html',
+        sync_stats=sync_stats,
+        total_prs=total_prs,
+        recent_issues=recent_issues,
+        stale_issues=stale_issues,
+        nodejs_count=nodejs_count,
+        python_count=python_count,
+        browser_count=browser_count,
+        dotnet_count=dotnet_count,
+        java_count=java_count,
+        nodejs_nav_links=nodejs_nav_links,
+        python_nav_links=python_nav_links,
+        browser_nav_links=browser_nav_links,
+        dotnet_nav_links=dotnet_nav_links,
+        java_nav_links=java_nav_links
+    )
+
+@app.route('/test')
+@login_required
+def test_page():
+    """UX Testing page for isolated UI/UX experiments"""
+    # Create custom span for test page rendering
+    if tracer:
+        with tracer.start_as_current_span("test_page_render") as span:
+            span.set_attribute("user.name", get_current_user().get('name', 'unknown'))
+            span.set_attribute("user.email", get_current_user().get('email', 'unknown'))
+            return _test_page_internal(span)
+    else:
+        return _test_page_internal(None)
+
+def _test_page_internal(span=None):
+    """Internal test page function with telemetry"""
+    print("🧪 Serving UX Test Page...")
+    logger.info("Test page request received")
+    
+    if span:
+        span.set_attribute("test.page", "ux_testing")
+        span.set_attribute("request.method", "GET")
+        logger.info("Test page telemetry span active")
+    else:
+        logger.warning("Test page telemetry span is None - telemetry may not be configured")
+    
+    # Simple placeholder data for navbar (to avoid complex data loading)
+    # This is just for testing UI components
+    if span:
+        span.set_attribute("test.navbar_data_loaded", True)
+    
+    # Render the test template with minimal navbar data
+    return render_template('test.html', 
+                         nodejs_count=42,
+                         python_count=38,
+                         browser_count=15,
+                         dotnet_count=29,
+                         java_count=12,
+                         nodejs_nav_links='<a class="dropdown-item" href="#">Test Node.js Repo</a>',
+                         python_nav_links='<a class="dropdown-item" href="#">Test Python Repo</a>',
+                         browser_nav_links='<a class="dropdown-item" href="#">Test Browser Repo</a>',
+                         dotnet_nav_links='<a class="dropdown-item" href="#">Test .NET Repo</a>',
+                         java_nav_links='<a class="dropdown-item" href="#">Test Java Repo</a>',
+                         current_state='open',  # Default state for testing
+                         last_updated=datetime.now(PACIFIC_TZ).strftime('%m/%d %I:%M %p'))
 
 @app.route('/api/status')
 @login_required
