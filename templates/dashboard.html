@@ -9,10 +9,10 @@
         <div class="row justify-content-center">
             <div class="col-auto">
                 <div class="btn-group" role="group" aria-label="Data Type Toggle">
-                    <button type="button" class="btn btn-toggle-data-type {{ 'btn-primary active' if data_type == 'issues' else 'btn-outline-primary' }}" id="issues-toggle" onclick="toggleDataType('issues')">
+                    <button type="button" class="btn btn-toggle-data-type btn-primary active" id="issues-toggle">
                         <i class="fas fa-exclamation-circle"></i> Issues
                     </button>
-                    <button type="button" class="btn btn-toggle-data-type {{ 'btn-primary active' if data_type == 'prs' else 'btn-outline-primary' }}" id="prs-toggle" onclick="toggleDataType('prs')">
+                    <button type="button" class="btn btn-toggle-data-type btn-outline-primary" id="prs-toggle">
                         <i class="fas fa-code-branch"></i> Pull Requests
                     </button>
                 </div>
@@ -79,27 +79,26 @@
         </div>
     </div>
     
-    <!-- Repository Sections (dynamically generated) -->
-    {{ repo_sections | safe }}
-    
-    <!-- Group Counts Script (dynamically generated) -->
-    {{ group_counts_script | safe }}
+    <!-- Repository Sections Container (dynamically populated by SPA) -->
+    <div id="repositories-container">
+        <!-- Repository sections will be dynamically generated here -->
+    </div>
 </div>
 
 <!-- Include Issue Modal Component -->
 {% include 'components/issue_modal.html' %}
 {% endblock %}
 
-{% block scripts %}
-<!-- Dashboard-specific JavaScript -->
-<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
-
+{% block extra_scripts %}
 <!-- Template Variables -->
 <script>
     // Global variables from Flask template
     var selectedRepoFromTemplate = '{{ selected_repo }}';
     var currentDataTypeFromTemplate = '{{ data_type }}';
     var syncStatsInProgress = {{ 'true' if sync_stats.in_progress else 'false' }};
-    var syncStatsErrors = {{ sync_stats.errors | default(0) }};
+    var syncStatsErrors = {{ sync_stats.errors | length if sync_stats.errors else 0 }};
 </script>
+
+<!-- SPA JavaScript (integrated with original dashboard.js) -->
+<script src="{{ url_for('static', filename='js/spa.js') }}"></script>
 {% endblock %}

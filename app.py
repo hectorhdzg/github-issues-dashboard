@@ -12,7 +12,7 @@ import requests
 import schedule
 import html
 import re
-from flask import Flask, render_template, render_template_string, jsonify, request, session, redirect, url_for
+from flask import Flask, render_template, render_template_string, jsonify, request, redirect, url_for
 import sqlite3
 import json
 from datetime import datetime, timezone, timedelta
@@ -155,127 +155,7 @@ else:
     repo_counter = None
 
 app = Flask(__name__)
-
-# Configure session for MSAL
-app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', str(uuid.uuid4()))
-
-# Azure AD Configuration for Certificate-Based User Authentication
-AAD_CONFIG = {
-    'CLIENT_ID': os.environ.get('AZURE_CLIENT_ID'),
-    'CERTIFICATE_PATH': os.environ.get('AZURE_CERTIFICATE_PATH'),  # Path to certificate file
-    'CERTIFICATE_THUMBPRINT': os.environ.get('AZURE_CERTIFICATE_THUMBPRINT'),  # Certificate thumbprint
-    'TENANT_ID': os.environ.get('AZURE_TENANT_ID'),
-    'AUTHORITY': f"https://login.microsoftonline.com/{os.environ.get('AZURE_TENANT_ID', 'common')}",
-    'REDIRECT_PATH': '/auth/callback',
-    'SCOPES': ['User.Read'],  # Basic profile information
-    'ENABLED': bool(os.environ.get('ENABLE_USER_AUTHENTICATION', 'false').lower() == 'true' and 
-                   os.environ.get('AZURE_CLIENT_ID') and 
-                   os.environ.get('AZURE_CERTIFICATE_PATH') and 
-                   os.environ.get('AZURE_CERTIFICATE_THUMBPRINT')),
-    'ACCESS_CONTROL_MODE': os.environ.get('ACCESS_CONTROL_MODE', 'open'),  # 'open' or 'restricted'
-    'AUTHORIZED_USERS': [email.strip() for email in os.environ.get('AUTHORIZED_USERS', '').split(',') if email.strip()]
-}
-
-# Initialize session
-from flask_session import Session
-Session(app)
-
-def build_msal_app(cache=None, authority=None):
-    """Build MSAL application with certificate-based authentication"""
-    try:
-        import msal
-        
-        # Use certificate-based authentication only
-        print("🔐 Using certificate-based authentication")
-        return msal.ConfidentialClientApplication(
-            AAD_CONFIG['CLIENT_ID'],
-            authority=authority or AAD_CONFIG['AUTHORITY'],
-            client_credential={
-                "private_key": open(AAD_CONFIG['CERTIFICATE_PATH'], 'r').read(),
-                "thumbprint": AAD_CONFIG['CERTIFICATE_THUMBPRINT']
-            },
-            token_cache=cache
-        )
-    except ImportError:
-        print("❌ MSAL library not found. Install with: pip install msal")
-        return None
-    except Exception as e:
-        print(f"❌ MSAL setup failed: {e}")
-        return None
-
-def load_cache():
-    """Load token cache from session"""
-    try:
-        import msal
-        cache = msal.SerializableTokenCache()
-        if session.get('token_cache'):
-            cache.deserialize(session['token_cache'])
-        return cache
-    except ImportError:
-        return None
-
-def save_cache(cache):
-    """Save token cache to session"""
-    if cache and cache.has_state_changed:
-        session['token_cache'] = cache.serialize()
-
-def is_user_authorized(user_email):
-    """Check if user is authorized to access the application"""
-    if not AAD_CONFIG['ENABLED']:
-        return True  # Skip authorization if authentication is disabled
-    
-    if AAD_CONFIG['ACCESS_CONTROL_MODE'] == 'open':
-        return True  # Anyone with valid authentication can access
-    
-    # Restricted mode - check against authorized users list
-    return user_email.lower() in [email.lower() for email in AAD_CONFIG['AUTHORIZED_USERS']]
-
-def is_authenticated():
-    """Check if user is authenticated"""
-    if not AAD_CONFIG['ENABLED']:
-        return True  # Skip authentication if disabled
-    return 'user' in session
-
-def get_current_user():
-    """Get current authenticated user info"""
-    if not AAD_CONFIG['ENABLED']:
-        return {'name': 'Local User', 'email': 'local@example.com'}
-    return session.get('user', {})
-
-def login_required(f):
-    """Decorator to require authentication"""
-    from functools import wraps
-    
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not is_authenticated():
-            # If authentication is disabled, allow access
-            if not AAD_CONFIG['ENABLED']:
-                return f(*args, **kwargs)
-            
-            # Store the original URL to redirect back after login
-            session['redirect_url'] = request.url
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def auth_required(f):
-    """Decorator to strictly require authentication - redirects to unauthorized page if auth is disabled or user not logged in"""
-    from functools import wraps
-    
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not AAD_CONFIG['ENABLED']:
-            # Authentication is disabled, redirect to unauthorized page
-            return redirect(url_for('unauthorized'))
-        
-        if not is_authenticated():
-            # Store the original URL to redirect back after login
-            session['redirect_url'] = request.url
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
 
 # GitHub API Configuration
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
@@ -2834,295 +2714,34 @@ def generate_repo_section(repo, data_items, is_first=False, current_state='open'
     </div>
     """
 
-# Authentication Routes
-@app.route('/login')
-def login():
-    """Initiate Azure AD certificate-based user authentication"""
-    if not AAD_CONFIG['ENABLED']:
-        return redirect(url_for('dashboard'))
-    
-    # Build MSAL app
-    cache = load_cache()
-    auth_app = build_msal_app(cache=cache)
-    if not auth_app:
-        return "Certificate-based authentication is not configured properly. Please ensure AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CERTIFICATE_PATH, and AZURE_CERTIFICATE_THUMBPRINT are set.", 500
-    
-    # Generate authorization request URL
-    auth_url = auth_app.get_authorization_request_url(
-        AAD_CONFIG['SCOPES'],
-        redirect_uri=url_for('auth_callback', _external=True)
-    )
-    
-    save_cache(cache)
-    return redirect(auth_url)
-
-@app.route('/auth/callback')
-def auth_callback():
-    """Handle Azure AD authentication callback"""
-    if not AAD_CONFIG['ENABLED']:
-        return redirect(url_for('dashboard'))
-    
-    # Build MSAL app
-    cache = load_cache()
-    auth_app = build_msal_app(cache=cache)
-    if not auth_app:
-        return "Authentication configuration error", 500
-    
-    try:
-        # Get token from authorization code
-        result = auth_app.acquire_token_by_authorization_code(
-            request.args.get('code'),
-            scopes=AAD_CONFIG['SCOPES'],
-            redirect_uri=url_for('auth_callback', _external=True)
-        )
-        
-        if 'error' in result:
-            print(f"❌ Authentication failed: {result.get('error_description', result.get('error'))}")
-            return f"Authentication failed: {result.get('error_description', result.get('error'))}", 400
-        
-        # Get user info from token
-        user_info = result.get('id_token_claims', {})
-        user_email = user_info.get('preferred_username') or user_info.get('email') or user_info.get('upn', '')
-        
-        # Check if user is authorized
-        if not is_user_authorized(user_email):
-            print(f"❌ Unauthorized access attempt by: {user_email}")
-            session.clear()
-            return redirect(url_for('unauthorized_user'))
-        
-        # Store user info in session
-        session['user'] = {
-            'name': user_info.get('name', 'Unknown User'),
-            'preferred_username': user_email,
-            'oid': user_info.get('oid', ''),
-            'auth_method': 'azure_ad_user'
-        }
-        
-        save_cache(cache)
-        print(f"✅ User authentication successful for: {user_email}")
-        
-        # Redirect to original URL or dashboard
-        redirect_url = session.pop('redirect_url', url_for('dashboard'))
-        return redirect(redirect_url)
-        
-    except Exception as e:
-        print(f"❌ Authentication callback failed: {e}")
-        return f"Authentication failed: {str(e)}", 500
-
-@app.route('/logout')
-def logout():
-    """Logout user"""
-    user_name = session.get('user', {}).get('name', 'Unknown User')
-    session.clear()
-    logger.info(f"User logged out: {user_name}")
-    
-    if AAD_CONFIG['ENABLED']:
-        # Redirect to Azure AD logout
-        logout_url = f"{AAD_CONFIG['AUTHORITY']}/oauth2/v2.0/logout?post_logout_redirect_uri={url_for('dashboard', _external=True)}"
-        return redirect(logout_url)
-    
-    return redirect(url_for('dashboard'))
-
-@app.route('/auth/status')
-def auth_status():
-    """API endpoint to check authentication status"""
-    return jsonify({
-        'authenticated': is_authenticated(),
-        'aad_enabled': AAD_CONFIG['ENABLED'],
-        'user': get_current_user() if is_authenticated() else None,
-        'access_control_mode': AAD_CONFIG['ACCESS_CONTROL_MODE'],
-        'login_url': url_for('login') if AAD_CONFIG['ENABLED'] else None,
-        'logout_url': url_for('logout') if AAD_CONFIG['ENABLED'] else None
-    })
-
-@app.route('/unauthorized')
-def unauthorized():
-    """Page for unauthorized users when authentication is disabled"""
-    return """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Authentication Disabled - GitHub Issues Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .unauthorized-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .unauthorized-card {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            padding: 60px 40px;
-            text-align: center;
-            max-width: 600px;
-            width: 100%;
-        }
-        .unauthorized-icon {
-            font-size: 80px;
-            color: #dc3545;
-            margin-bottom: 30px;
-        }
-        .unauthorized-title {
-            color: #333;
-            font-size: 2.5rem;
-            font-weight: 700;
-            margin-bottom: 20px;
-        }
-        .unauthorized-message {
-            color: #666;
-            font-size: 1.2rem;
-            line-height: 1.6;
-            margin-bottom: 40px;
-        }
-    </style>
-</head>
-<body>
-    <div class="unauthorized-container">
-        <div class="unauthorized-card">
-            <i class="fas fa-shield-alt unauthorized-icon"></i>
-            <h1 class="unauthorized-title">Authentication Required</h1>
-            <p class="unauthorized-message">
-                Authentication is currently disabled for this application. Contact your administrator to enable user authentication.
-            </p>
-        </div>
-    </div>
-</body>
-</html>
-    """
-
-@app.route('/unauthorized-user')
-def unauthorized_user():
-    """Page for users who are authenticated but not authorized"""
-    return """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Access Denied - GitHub Issues Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .unauthorized-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .unauthorized-card {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            padding: 60px 40px;
-            text-align: center;
-            max-width: 600px;
-            width: 100%;
-        }
-        .unauthorized-icon {
-            font-size: 80px;
-            color: #ffc107;
-            margin-bottom: 30px;
-        }
-        .unauthorized-title {
-            color: #333;
-            font-size: 2.5rem;
-            font-weight: 700;
-            margin-bottom: 20px;
-        }
-        .unauthorized-message {
-            color: #666;
-            font-size: 1.2rem;
-            line-height: 1.6;
-            margin-bottom: 40px;
-        }
-        .btn-logout {
-            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-            border: none;
-            color: white;
-            padding: 15px 30px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            border-radius: 50px;
-            text-decoration: none;
-            display: inline-block;
-            transition: all 0.3s ease;
-            box-shadow: 0 10px 20px rgba(220, 53, 69, 0.3);
-        }
-        .btn-logout:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 15px 30px rgba(220, 53, 69, 0.4);
-            color: white;
-        }
-    </style>
-</head>
-<body>
-    <div class="unauthorized-container">
-        <div class="unauthorized-card">
-            <i class="fas fa-user-times unauthorized-icon"></i>
-            <h1 class="unauthorized-title">Access Denied</h1>
-            <p class="unauthorized-message">
-                You have successfully authenticated, but you are not authorized to access this application. 
-                Please contact your administrator to request access.
-            </p>
-            <a href="/logout" class="btn-logout">
-                <i class="fas fa-sign-out-alt me-2"></i>
-                Sign Out
-            </a>
-        </div>
-    </div>
-</body>
-</html>
-    """
-
 @app.route('/')
-@login_required
 def dashboard():
     """Main dashboard route"""
     # Create custom span for dashboard rendering
     if tracer:
         with tracer.start_as_current_span("dashboard_render") as span:
-            span.set_attribute("user.name", get_current_user().get('name', 'unknown'))
-            span.set_attribute("user.email", get_current_user().get('email', 'unknown'))
+            span.set_attribute("user.name", "anonymous")
+            span.set_attribute("user.email", "anonymous")
             return _dashboard_internal(span)
     else:
         return _dashboard_internal(None)
 
 def _dashboard_internal(span=None):
-    """Internal dashboard function with telemetry"""
-    print("🌐 Serving GitHub Issues Dashboard...")
+    """Internal dashboard function with telemetry - SPA version"""
+    print("🌐 Serving GitHub Issues Dashboard (SPA)...")
     logger.info("Dashboard request received")
     
-    # Get the selected repo from query parameter
+    # Get parameters for initial state (SPA will handle the actual data loading)
     selected_repo = request.args.get('repo', '')
     selected_repo = unquote(selected_repo) if selected_repo else ''
     
-    # Get the data type from query parameter (default to 'issues')
     data_type = request.args.get('type', 'issues')
     if data_type not in ['issues', 'prs']:
-        data_type = 'issues'  # Default to issues if invalid value
+        data_type = 'issues'
     
-    # Get the state filter from query parameter (default to 'open')
     show_state = request.args.get('state', 'open')
     if show_state not in ['open', 'closed', 'all']:
-        show_state = 'open'  # Default to open if invalid value
+        show_state = 'open'
     
     if span:
         span.set_attribute("dashboard.selected_repo", selected_repo)
@@ -3130,23 +2749,21 @@ def _dashboard_internal(span=None):
         span.set_attribute("dashboard.show_state", show_state)
         span.set_attribute("request.method", "GET")
         span.set_attribute("request.user_agent", request.headers.get('User-Agent', 'unknown'))
-        logger.info(f"Dashboard telemetry span active with selected_repo: {selected_repo}, type: {data_type}, state: {show_state}")
-    else:
-        logger.warning("Dashboard telemetry span is None - telemetry may not be configured")
+        span.set_attribute("dashboard.spa_mode", True)
+        logger.info(f"Dashboard SPA mode with selected_repo: {selected_repo}, type: {data_type}, state: {show_state}")
     
-    # Get data from database based on data type
-    if data_type == 'prs':
-        data_items = get_pull_requests_from_db(state_filter=show_state)
-        data_label = "Pull Requests"
-        data_label_singular = "Pull Request"
-    else:
-        data_items = get_issues_from_db(state_filter=show_state) 
-        data_label = "Issues"
-        data_label_singular = "Issue"
+    # Get sync stats for initial page load
+    sync_stats = get_sync_statistics()
     
     if span:
-        span.set_attribute("dashboard.data_found", len(data_items) > 0)
-        span.set_attribute("dashboard.total_items", len(data_items))
+        span.set_attribute("dashboard.sync_in_progress", sync_stats.get('in_progress', False))
+    
+    # Render minimal template - SPA will populate the content
+    return render_template('dashboard.html',
+                         selected_repo=selected_repo,
+                         data_type=data_type,
+                         show_state=show_state,
+                         sync_stats=sync_stats)
     
     # If no data found, we'll render the template with empty sections
     # This ensures the UI is always consistent with navigation and toggle
@@ -3732,14 +3349,14 @@ def generate_stats_template(issues, pull_requests, sync_stats):
     return html
 
 @app.route('/stats')
-@login_required
+
 def stats():
     """Stats page route"""
     # Create custom span for stats page rendering
     if tracer:
         with tracer.start_as_current_span("stats_render") as span:
-            span.set_attribute("user.name", get_current_user().get('name', 'unknown'))
-            span.set_attribute("user.email", get_current_user().get('email', 'unknown'))
+            span.set_attribute("user.name", "anonymous")
+            span.set_attribute("user.email", "anonymous")
             return _stats_internal(span)
     else:
         return _stats_internal(None)
@@ -3845,14 +3462,14 @@ def _stats_internal(span=None):
     )
 
 @app.route('/test')
-@login_required
+
 def test_page():
     """UX Testing page for isolated UI/UX experiments"""
     # Create custom span for test page rendering
     if tracer:
         with tracer.start_as_current_span("test_page_render") as span:
-            span.set_attribute("user.name", get_current_user().get('name', 'unknown'))
-            span.set_attribute("user.email", get_current_user().get('email', 'unknown'))
+            span.set_attribute("user.name", "anonymous")
+            span.set_attribute("user.email", "anonymous")
             return _test_page_internal(span)
     else:
         return _test_page_internal(None)
@@ -3890,7 +3507,7 @@ def _test_page_internal(span=None):
                          last_updated=datetime.now(PACIFIC_TZ).strftime('%m/%d %I:%M %p'))
 
 @app.route('/api/status')
-@login_required
+
 def status():
     """API endpoint for status"""
     try:
@@ -3913,11 +3530,11 @@ def status():
         }), 500
 
 @app.route('/api/update_issue', methods=['POST'])
-@login_required
+
 def update_issue():
     """API endpoint to update issue triage and priority"""
     try:
-        user = get_current_user()
+        user = {"name": "anonymous", "email": "anonymous"}
         print(f"🔄 Received update request from user: {user.get('name', 'Unknown')}")
         data = request.get_json()
         print(f"📝 Request data: {data}")
@@ -3953,7 +3570,7 @@ def update_issue():
         }), 500
 
 @app.route('/sync')
-@login_required
+
 def sync_page():
     """Sync management page using new template structure"""
     # Get sync statistics
@@ -3963,7 +3580,7 @@ def sync_page():
     return render_template('sync.html', sync_stats=sync_stats)
 
 @app.route('/sync_all')
-@login_required
+
 def sync_all():
     """Trigger sync and redirect to sync page"""
     # Start sync in background
@@ -3973,7 +3590,7 @@ def sync_all():
     return redirect(url_for('sync_page'))
 
 @app.route('/api/sync_status')
-@login_required
+
 def get_sync_status():
     """Get current sync status"""
     return jsonify({
@@ -3989,7 +3606,7 @@ def get_sync_status():
     })
 
 @app.route('/api/sync_now', methods=['POST'])
-@login_required
+
 def trigger_sync():
     """Manually trigger a sync (admin endpoint)"""
     if sync_status['sync_in_progress']:
@@ -4025,7 +3642,7 @@ def health():
         return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat(), 'telemetry_enabled': False})
 
 @app.route('/api/telemetry_test')
-@login_required
+
 def telemetry_test():
     """Test endpoint to verify Azure Monitor telemetry is working"""
     if not tracer or not meter:
@@ -4099,6 +3716,182 @@ def api_detect_closed_issues():
             'message': f'Error detecting closed issues: {str(e)}'
         }), 500
 
+# ============================================================================
+# SPA API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/dashboard/data')
+
+def api_dashboard_data():
+    """API endpoint to get all dashboard data for SPA"""
+    try:
+        # Get query parameters
+        data_type = request.args.get('type', 'issues')
+        show_state = request.args.get('state', 'open')
+        
+        if data_type not in ['issues', 'prs']:
+            data_type = 'issues'
+        if show_state not in ['open', 'closed', 'all']:
+            show_state = 'open'
+        
+        # Get data based on type
+        if data_type == 'prs':
+            data_items = get_pull_requests_from_db(state_filter=show_state)
+        else:
+            data_items = get_issues_from_db(state_filter=show_state)
+        
+        # Group data by repository
+        repo_groups = group_issues_by_repo(data_items)
+        
+        # Get all configured repositories
+        all_repositories = get_all_configured_repositories()
+        
+        # Calculate counts by SDK
+        sdk_counts = {
+            'nodejs': 0,
+            'python': 0,
+            'browser': 0,
+            'dotnet': 0,
+            'java': 0,
+            'total': 0
+        }
+        
+        # Count items by SDK type
+        for repo, items in repo_groups.items():
+            count = len(items)
+            sdk_counts['total'] += count
+            
+            if 'azure-sdk-for-js' in repo:
+                sdk_counts['nodejs'] += count
+            elif 'azure-sdk-for-python' in repo:
+                sdk_counts['python'] += count
+            elif 'azure-sdk-for-browser' in repo:
+                sdk_counts['browser'] += count
+            elif 'azure-sdk-for-net' in repo:
+                sdk_counts['dotnet'] += count
+            elif 'azure-sdk-for-java' in repo:
+                sdk_counts['java'] += count
+        
+        # Prepare repository data
+        repositories = []
+        for repo in all_repositories:
+            repo_data = repo_groups.get(repo, [])
+            repo_info = {
+                'name': repo,
+                'id': repo.replace('/', '-').replace('.', '-'),
+                'display_name': repo.split('/')[-1],
+                'items': repo_data,
+                'count': len(repo_data),
+                'sdk_type': get_sdk_type(repo)
+            }
+            repositories.append(repo_info)
+        
+        # Get sync status
+        sync_stats = get_sync_statistics()
+        
+        response_data = {
+            'data_type': data_type,
+            'show_state': show_state,
+            'sdk_counts': sdk_counts,
+            'repositories': repositories,
+            'sync_stats': sync_stats,
+            'all_repositories': all_repositories
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"Error in api_dashboard_data: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def get_sdk_type(repo_name):
+    """Determine SDK type from repository name"""
+    repo_lower = repo_name.lower()
+    
+    # Browser JavaScript repositories (client-side)
+    if ('applicationinsights-js' in repo_lower or
+        'angularplugin-js' in repo_lower or 
+        'react-js' in repo_lower or
+        'react-native' in repo_lower or
+        'azure-sdk-for-browser' in repo_lower):
+        return 'browser'
+    
+    # Node.js repositories (server-side)
+    elif ('azure-sdk-for-js' in repo_lower or 
+          'node.js' in repo_lower or
+          'opentelemetry-js' in repo_lower or
+          'dynamicproto-js' in repo_lower or
+          'node-diagnostic' in repo_lower):
+        return 'nodejs'
+    
+    # Python repositories  
+    elif ('azure-sdk-for-python' in repo_lower or
+          'opentelemetry-python' in repo_lower):
+        return 'python'
+        
+    # .NET repositories
+    elif ('azure-sdk-for-net' in repo_lower or
+          'insights-dotnet' in repo_lower or
+          'opentelemetry-dotnet' in repo_lower):
+        return 'dotnet'
+        
+    # Java repositories
+    elif ('azure-sdk-for-java' in repo_lower or
+          'insights-java' in repo_lower or
+          'opentelemetry-java' in repo_lower):
+        return 'java'
+    
+    else:
+        return 'other'
+
+@app.route('/api/repositories')
+
+def api_repositories():
+    """API endpoint to get all configured repositories"""
+    try:
+        repositories = get_all_configured_repositories()
+        return jsonify({'repositories': repositories})
+    except Exception as e:
+        logger.error(f"Error in api_repositories: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/repository/<path:repo_name>')
+
+def api_repository_data(repo_name):
+    """API endpoint to get data for a specific repository"""
+    try:
+        data_type = request.args.get('type', 'issues')
+        show_state = request.args.get('state', 'open')
+        
+        if data_type not in ['issues', 'prs']:
+            data_type = 'issues'
+        if show_state not in ['open', 'closed', 'all']:
+            show_state = 'open'
+        
+        # Get data based on type
+        if data_type == 'prs':
+            all_items = get_pull_requests_from_db(state_filter=show_state)
+        else:
+            all_items = get_issues_from_db(state_filter=show_state)
+        
+        # Filter for specific repository
+        repo_items = [item for item in all_items if item.get('repository_name') == repo_name]
+        
+        repo_info = {
+            'name': repo_name,
+            'id': repo_name.replace('/', '-').replace('.', '-'),
+            'display_name': repo_name.split('/')[-1],
+            'items': repo_items,
+            'count': len(repo_items),
+            'sdk_type': get_sdk_type(repo_name)
+        }
+        
+        return jsonify(repo_info)
+        
+    except Exception as e:
+        logger.error(f"Error in api_repository_data: {e}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     print("🚀 Starting Fixed GitHub Issues Dashboard Server...")
     print("=" * 60)
@@ -4113,3 +3906,4 @@ if __name__ == '__main__':
 else:
     # For production deployment (e.g., gunicorn), start scheduler when module is imported
     start_sync_scheduler()
+
