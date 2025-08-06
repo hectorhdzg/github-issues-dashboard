@@ -96,7 +96,7 @@
     var selectedRepoFromTemplate = '{{ selected_repo }}';
     var currentDataTypeFromTemplate = '{{ data_type }}';
     var syncStatsInProgress = {{ 'true' if sync_stats.in_progress else 'false' }};
-    var syncStatsErrors = {{ sync_stats.errors | length if sync_stats.errors else 0 }};
+    var syncStatsErrors = {{ sync_stats.errors or 0 }};
 </script>
 
 <!-- SPA JavaScript (integrated with original dashboard.js) -->

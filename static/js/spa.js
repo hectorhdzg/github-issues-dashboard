@@ -25,20 +25,15 @@ class DashboardSPA {
         const repoLower = repoName.toLowerCase();
         
         // Browser JavaScript repositories (client-side)
-        if (repoLower.includes('applicationinsights-js') ||
-            repoLower.includes('angularplugin-js') ||
-            repoLower.includes('react-js') ||
-            repoLower.includes('react-native') ||
-            repoLower.includes('azure-sdk-for-browser')) {
+        if (repoLower.includes('applicationinsights-js') && !repoLower.includes('node.js')) {
             return 'browser';
         }
         
         // Node.js repositories (server-side)
         else if (repoLower.includes('azure-sdk-for-js') ||
-                 repoLower.includes('node.js') ||
-                 repoLower.includes('opentelemetry-js') ||
-                 repoLower.includes('dynamicproto-js') ||
-                 repoLower.includes('node-diagnostic')) {
+                 repoLower.includes('applicationinsights-node.js') ||
+                 repoLower.includes('opentelemetry-js-contrib') ||
+                 (repoLower.includes('opentelemetry-js') && !repoLower.includes('contrib'))) {
             return 'nodejs';
         }
         
@@ -49,15 +44,13 @@ class DashboardSPA {
         }
         
         // .NET repositories  
-        else if (repoLower.includes('azure-sdk-for-net') ||
-                 repoLower.includes('insights-dotnet') ||
+        else if (repoLower.includes('applicationinsights-dotnet') ||
                  repoLower.includes('opentelemetry-dotnet')) {
             return 'dotnet';
         }
         
         // Java repositories
-        else if (repoLower.includes('azure-sdk-for-java') ||
-                 repoLower.includes('insights-java') ||
+        else if (repoLower.includes('applicationinsights-java') ||
                  repoLower.includes('opentelemetry-java')) {
             return 'java';
         }
@@ -245,9 +238,12 @@ class DashboardSPA {
     }
     
     updateUIFromData(data) {
+        // Process repository data from backend format to frontend format
+        const processedRepos = this.processRepositoryData(data);
+        
         // Update state
-        this.state.repositories = data.repositories; // Only repos with data
-        this.state.allRepositories = data.all_repositories || []; // All repos including those with 0 records
+        this.state.repositories = processedRepos; // Processed repo objects with data
+        this.state.allRepositories = data.all_repositories || []; // Raw repo names (for navigation)
         this.state.sdkCounts = data.sdk_counts;
         this.state.syncStats = data.sync_stats;
         
@@ -265,6 +261,53 @@ class DashboardSPA {
         
         // Show/hide appropriate sections
         this.updateVisibility();
+    }
+    
+    processRepositoryData(data) {
+        // Use new API structure with metadata
+        const repositories = data.repositories || [];
+        const repositoriesMetadata = data.repositories_metadata || [];
+        const items = data.data || [];
+        
+        // Create metadata lookup for faster access
+        const metadataLookup = {};
+        repositoriesMetadata.forEach(repoMeta => {
+            metadataLookup[repoMeta.repo] = repoMeta;
+        });
+        
+        // Group items by repository
+        const itemsByRepo = {};
+        items.forEach(item => {
+            const repoName = item.repository;
+            if (!itemsByRepo[repoName]) {
+                itemsByRepo[repoName] = [];
+            }
+            itemsByRepo[repoName].push(item);
+        });
+        
+        // Create repository objects with processed data using metadata
+        return repositories.map(repoName => {
+            const repoItems = itemsByRepo[repoName] || [];
+            const metadata = metadataLookup[repoName];
+            
+            // Use metadata if available, otherwise fallback to old logic
+            const displayName = metadata ? metadata.display_name : this.getDisplayName(repoName);
+            const mainCategory = metadata ? metadata.main_category : this.getSdkType(repoName);
+            const classification = metadata ? metadata.classification : 'other';
+            const priority = metadata ? metadata.priority : 999;
+            
+            return {
+                id: repoName.replace(/[^a-zA-Z0-9]/g, '-'), // Safe ID for HTML
+                name: repoName,
+                display_name: displayName,
+                sdk_type: mainCategory, // Using main_category as SDK type for backwards compatibility
+                main_category: mainCategory,
+                classification: classification,
+                priority: priority,
+                count: repoItems.length,
+                items: repoItems
+            };
+        });
     }
     
     updateDataTypeToggle() {
@@ -597,17 +640,19 @@ class DashboardSPA {
         // Update navbar counts based on current data
         if (!this.state.repositories) return;
         
-        // Calculate counts by SDK type
+        // Calculate counts by main_category (using new metadata structure)
         const counts = {
             nodejs: 0,
             python: 0,
             browser: 0,
             dotnet: 0,
-            java: 0
+            java: 0,
+            react: 0
         };
         
         this.state.repositories.forEach(repo => {
-            switch(repo.sdk_type) {
+            const category = repo.main_category || repo.sdk_type; // Fallback to old field
+            switch(category) {
                 case 'nodejs':
                     counts.nodejs += repo.count;
                     break;
@@ -615,6 +660,7 @@ class DashboardSPA {
                     counts.python += repo.count;
                     break;
                 case 'browser':
+                case 'javascript': // Group javascript with browser
                     counts.browser += repo.count;
                     break;
                 case 'dotnet':
@@ -622,6 +668,11 @@ class DashboardSPA {
                     break;
                 case 'java':
                     counts.java += repo.count;
+                    break;
+                case 'react':
+                case 'react-native':
+                case 'angular': // Group React-related frameworks
+                    counts.react += repo.count;
                     break;
             }
         });
@@ -632,6 +683,7 @@ class DashboardSPA {
         this.updateNavbarCount('navbar-browser-count', counts.browser);
         this.updateNavbarCount('navbar-dotnet-count', counts.dotnet);
         this.updateNavbarCount('navbar-java-count', counts.java);
+        this.updateNavbarCount('navbar-react-count', counts.react);
         
         // Update dropdown menus
         this.updateNavbarDropdowns();
@@ -645,34 +697,178 @@ class DashboardSPA {
     }
     
     updateNavbarDropdowns() {
-        // Update dropdown menus with repository links
+        // Update dropdown menus with repository links using new metadata structure
         this.updateDropdownMenu('nodejs-dropdown-menu', 'nodejs');
         this.updateDropdownMenu('python-dropdown-menu', 'python');
-        this.updateDropdownMenu('browser-dropdown-menu', 'browser');
         this.updateDropdownMenu('dotnet-dropdown-menu', 'dotnet');
+        this.updateDropdownMenu('browser-dropdown-menu', 'browser');
+        this.updateDropdownMenu('react-dropdown-menu', 'react');
         this.updateDropdownMenu('java-dropdown-menu', 'java');
+        
+        // Handle additional categories by grouping them
+        this.updateMultiCategoryDropdownMenu('react-dropdown-menu', ['react', 'react-native', 'angular']);
     }
     
-    updateDropdownMenu(dropdownId, sdkType) {
+    updateMultiCategoryDropdownMenu(dropdownId, categories) {
         const dropdown = document.getElementById(dropdownId);
         if (!dropdown || !this.state.repositories) return;
         
-        // Filter repositories for this SDK type - repositories array already includes all repos with their counts
-        const repos = this.state.repositories.filter(repo => repo.sdk_type === sdkType);
+        // Filter repositories by multiple categories and sort by classification priority and then by priority
+        const repos = this.state.repositories
+            .filter(repo => categories.includes(repo.main_category))
+            .sort((a, b) => {
+                // First sort by classification priority (azure=1, opentelemetry=2, microsoft=3)
+                const classificationOrder = {'azure': 1, 'opentelemetry': 2, 'microsoft': 3};
+                const aClassPriority = classificationOrder[a.classification] || 999;
+                const bClassPriority = classificationOrder[b.classification] || 999;
+                
+                if (aClassPriority !== bClassPriority) {
+                    return aClassPriority - bClassPriority;
+                }
+                
+                // Then sort by individual priority within classification
+                return (a.priority || 999) - (b.priority || 999);
+            });
+            
         if (repos.length === 0) {
             dropdown.innerHTML = '<span class="dropdown-item-text text-muted">No repositories</span>';
             return;
         }
         
-        dropdown.innerHTML = repos.map(repo => {
-            const isActive = repo.name === this.state.selectedRepo ? 'active' : '';
-            const countBadge = repo.count > 0 ? 
-                `<span class="badge badge-light ml-2">${repo.count}</span>` : 
-                `<span class="badge badge-secondary ml-2">0</span>`;
-            return `<a class="dropdown-item ${isActive}" href="#" onclick="dashboardSPA.selectRepository('${repo.name}'); return false;">
-                ${repo.display_name} ${countBadge}
-            </a>`;
-        }).join('');
+        // Group by classification and then by main_category for better organization
+        const groupedRepos = {};
+        repos.forEach(repo => {
+            const classification = repo.classification || 'other';
+            const mainCategory = repo.main_category || 'other';
+            
+            if (!groupedRepos[classification]) {
+                groupedRepos[classification] = {};
+            }
+            if (!groupedRepos[classification][mainCategory]) {
+                groupedRepos[classification][mainCategory] = [];
+            }
+            groupedRepos[classification][mainCategory].push(repo);
+        });
+        
+        // Generate dropdown HTML with classification and category groups
+        const dropdownHTML = [];
+        
+        // Order classifications: azure, opentelemetry, microsoft, others
+        const classificationOrder = ['azure', 'opentelemetry', 'microsoft', 'other'];
+        
+        classificationOrder.forEach(classification => {
+            if (groupedRepos[classification]) {
+                // Add classification header
+                if (dropdownHTML.length > 0) {
+                    dropdownHTML.push('<div class="dropdown-divider"></div>');
+                }
+                
+                const classificationLabel = this.getClassificationLabel(classification);
+                dropdownHTML.push(`<h6 class="dropdown-header">${classificationLabel}</h6>`);
+                
+                // Add repositories grouped by main category
+                Object.keys(groupedRepos[classification]).forEach(mainCategory => {
+                    const categoryRepos = groupedRepos[classification][mainCategory];
+                    
+                    // Add sub-category header if multiple categories
+                    if (categories.length > 1) {
+                        dropdownHTML.push(`<div class="dropdown-item-text font-weight-bold text-capitalize px-3">${mainCategory}</div>`);
+                    }
+                    
+                    categoryRepos.forEach(repo => {
+                        const isActive = repo.name === this.state.selectedRepo ? 'active' : '';
+                        const countBadge = repo.count > 0 ? 
+                            `<span class="badge badge-light ml-2">${repo.count}</span>` : 
+                            `<span class="badge badge-secondary ml-2">0</span>`;
+                        
+                        dropdownHTML.push(`<a class="dropdown-item ${isActive}" href="#" onclick="dashboardSPA.selectRepository('${repo.name}'); return false;">
+                            ${repo.display_name} ${countBadge}
+                        </a>`);
+                    });
+                });
+            }
+        });
+        
+        dropdown.innerHTML = dropdownHTML.join('');
+    }
+    
+    updateDropdownMenu(dropdownId, mainCategory) {
+        const dropdown = document.getElementById(dropdownId);
+        if (!dropdown || !this.state.repositories) return;
+        
+        // Filter repositories by main_category and sort by classification priority and then by priority
+        const repos = this.state.repositories
+            .filter(repo => repo.main_category === mainCategory)
+            .sort((a, b) => {
+                // First sort by classification priority (azure=1, opentelemetry=2, microsoft=3)
+                const classificationOrder = {'azure': 1, 'opentelemetry': 2, 'microsoft': 3};
+                const aClassPriority = classificationOrder[a.classification] || 999;
+                const bClassPriority = classificationOrder[b.classification] || 999;
+                
+                if (aClassPriority !== bClassPriority) {
+                    return aClassPriority - bClassPriority;
+                }
+                
+                // Then sort by individual priority within classification
+                return (a.priority || 999) - (b.priority || 999);
+            });
+            
+        if (repos.length === 0) {
+            dropdown.innerHTML = '<span class="dropdown-item-text text-muted">No repositories</span>';
+            return;
+        }
+        
+        // Group by classification for better organization
+        const groupedRepos = {};
+        repos.forEach(repo => {
+            const classification = repo.classification || 'other';
+            if (!groupedRepos[classification]) {
+                groupedRepos[classification] = [];
+            }
+            groupedRepos[classification].push(repo);
+        });
+        
+        // Generate dropdown HTML with classification groups
+        const dropdownHTML = [];
+        
+        // Order classifications: azure, opentelemetry, microsoft, others
+        const classificationOrder = ['azure', 'opentelemetry', 'microsoft', 'other'];
+        
+        classificationOrder.forEach(classification => {
+            if (groupedRepos[classification] && groupedRepos[classification].length > 0) {
+                // Add classification header
+                if (dropdownHTML.length > 0) {
+                    dropdownHTML.push('<div class="dropdown-divider"></div>');
+                }
+                
+                const classificationLabel = this.getClassificationLabel(classification);
+                dropdownHTML.push(`<h6 class="dropdown-header">${classificationLabel}</h6>`);
+                
+                // Add repositories in this classification
+                groupedRepos[classification].forEach(repo => {
+                    const isActive = repo.name === this.state.selectedRepo ? 'active' : '';
+                    const countBadge = repo.count > 0 ? 
+                        `<span class="badge badge-light ml-2">${repo.count}</span>` : 
+                        `<span class="badge badge-secondary ml-2">0</span>`;
+                    
+                    dropdownHTML.push(`<a class="dropdown-item ${isActive}" href="#" onclick="dashboardSPA.selectRepository('${repo.name}'); return false;">
+                        ${repo.display_name} ${countBadge}
+                    </a>`);
+                });
+            }
+        });
+        
+        dropdown.innerHTML = dropdownHTML.join('');
+    }
+    
+    getClassificationLabel(classification) {
+        const labels = {
+            'azure': '🔵 Azure',
+            'opentelemetry': '🔗 OpenTelemetry', 
+            'microsoft': '🏢 Microsoft',
+            'other': '📦 Other'
+        };
+        return labels[classification] || labels['other'];
     }
     
     updateVisibility() {

@@ -101,11 +101,11 @@
 
                 <!-- Action Buttons -->
                 <div class="text-center mt-4">
-                    <a href="{{ url_for('sync_all') }}" class="btn btn-primary btn-lg" 
+                    <button onclick="startSync()" class="btn btn-primary btn-lg" 
                        {% if sync_stats.in_progress %}disabled{% endif %}>
                         <i class="fas fa-sync-alt"></i> 
                         {% if sync_stats.in_progress %}Syncing...{% else %}Sync Now{% endif %}
-                    </a>
+                    </button>
                     <a href="{{ url_for('dashboard') }}" class="btn btn-secondary btn-lg ml-2">
                         <i class="fas fa-arrow-left"></i> Back to Dashboard
                     </a>
@@ -157,6 +157,23 @@
                 statusText.style.color = '#48bb78';
             }
         }
+    }
+    
+    // Start sync function
+    function startSync() {
+        fetch('/api/sync_now', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload(); // Reload page to show updated status
+                } else {
+                    alert('Sync failed: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error starting sync:', error);
+                alert('Failed to start sync');
+            });
     }
     
     // Call on page load
