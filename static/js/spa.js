@@ -955,3 +955,19 @@ function testRepoSelection(repo) {
 // Export for use in other scripts
 window.DashboardSPA = DashboardSPA;
 window.testRepoSelection = testRepoSelection;
+
+// Handle home navigation - works on both SPA and non-SPA pages
+function handleHomeNavigation() {
+    // If we're on the dashboard page and have SPA functionality, use SPA navigation
+    if (window.location.pathname === '/' && typeof clearRepoSelection === 'function') {
+        clearRepoSelection();
+        return false; // Prevent default href navigation
+    }
+    
+    // For other pages or if SPA isn't available, navigate to home
+    window.location.href = '/';
+    return false;
+}
+
+// Export the navigation function
+window.handleHomeNavigation = handleHomeNavigation;
