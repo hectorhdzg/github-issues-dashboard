@@ -109,6 +109,34 @@ class DashboardSPA {
             }
         });
         
+        // Dropdown menu item clicks (for repository selection)
+        document.addEventListener('click', (e) => {
+            // Handle dropdown items with onclick handlers
+            if (e.target.matches('.dropdown-item[onclick*="selectRepository"]')) {
+                e.preventDefault();
+                console.log('Dropdown item clicked via onclick handler:', e.target);
+                // Extract repository name from onclick attribute
+                const onclickAttr = e.target.getAttribute('onclick');
+                const match = onclickAttr.match(/selectRepository\('([^']+)'\)/);
+                if (match) {
+                    const repoName = match[1];
+                    console.log('Selecting repository from dropdown:', repoName);
+                    this.selectRepository(repoName);
+                }
+                return false;
+            }
+            
+            // Also handle dropdown items without onclick (fallback)
+            if (e.target.matches('.dropdown-item') && e.target.textContent.trim() !== '') {
+                const dropdownMenu = e.target.closest('.dropdown-menu');
+                if (dropdownMenu && dropdownMenu.id.includes('-dropdown-menu')) {
+                    console.log('Dropdown item clicked (fallback):', e.target.textContent);
+                    e.preventDefault();
+                    // This is a fallback - the onclick handler should handle it
+                }
+            }
+        });
+        
         // Browser back/forward buttons
         window.addEventListener('popstate', (e) => {
             this.handlePopState(e);
@@ -398,7 +426,7 @@ class DashboardSPA {
             </div>
         `;
         
-        // Generate search/filter controls (expected by dashboard.js)
+    // Generate search/filter controls (expected by dashboard.js)
         const searchControls = `
             <div class="controls mb-3">
                 <div class="input-group">
@@ -443,6 +471,28 @@ class DashboardSPA {
             </div>
         `;
         
+        // Dynamic table headers based on data type
+        const isPRs = this.state.dataType === 'prs' || (repo.items[0] && repo.items[0].item_type === 'pr');
+    const tableHeaders = isPRs ? `
+                        <tr>
+                <th onclick="sortTable('${repo.id}', 'number')" class="sortable" data-column="number"># <i class="fas fa-sort sort-icon"></i></th>
+                <th onclick="sortTable('${repo.id}', 'title')" class="sortable" data-column="title">Title <i class="fas fa-sort sort-icon"></i></th>
+                <th>Labels</th>
+                <th>Author</th>
+                <th>Reviewers</th>
+                <th>Assignees</th>
+                <th onclick="sortTable('${repo.id}', 'created')" class="sortable" data-column="created">Created <i class="fas fa-sort sort-icon"></i></th>
+                <th onclick="sortTable('${repo.id}', 'updated')" class="sortable" data-column="updated">Updated <i class="fas fa-sort sort-icon"></i></th>
+                        </tr>` : `
+                        <tr>
+                <th onclick="sortTable('${repo.id}', 'number')" class="sortable" data-column="number"># <i class="fas fa-sort sort-icon"></i></th>
+                <th onclick="sortTable('${repo.id}', 'title')" class="sortable" data-column="title">Title <i class="fas fa-sort sort-icon"></i></th>
+                <th onclick="sortTable('${repo.id}', 'labels')" class="sortable" data-column="labels">Labels <i class="fas fa-sort sort-icon"></i></th>
+                <th onclick="sortTable('${repo.id}', 'assignee')" class="sortable" data-column="assignee">Assignee <i class="fas fa-sort sort-icon"></i></th>
+                <th onclick="sortTable('${repo.id}', 'created')" class="sortable" data-column="created">Created <i class="fas fa-sort sort-icon"></i></th>
+                <th onclick="sortTable('${repo.id}', 'updated')" class="sortable" data-column="updated">Updated <i class="fas fa-sort sort-icon"></i></th>
+                        </tr>`;
+
         return `
         <div class="repository-section repo-section spa-fade-in" id="repo-${repo.id}" data-repo="${repo.name}">
             <div class="repo-header">
@@ -459,34 +509,9 @@ class DashboardSPA {
             ${searchControls}
             
             <div class="table-responsive">
-                <table class="table table-hover issues-table" id="table-${repo.id}">
+                <table class="table table-striped table-hover table-sm issues-table ${isPRs ? 'prs' : ''}" id="table-${repo.id}">
                     <thead class="thead-light">
-                        <tr>
-                            <th onclick="sortTable('${repo.id}', 'number')" class="sortable">
-                                #
-                                <i class="fas fa-sort sort-icon"></i>
-                            </th>
-                            <th onclick="sortTable('${repo.id}', 'title')" class="sortable">
-                                Title
-                                <i class="fas fa-sort sort-icon"></i>
-                            </th>
-                            <th onclick="sortTable('${repo.id}', 'labels')" class="sortable">
-                                Labels
-                                <i class="fas fa-sort sort-icon"></i>
-                            </th>
-                            <th onclick="sortTable('${repo.id}', 'assignee')" class="sortable">
-                                Assignee
-                                <i class="fas fa-sort sort-icon"></i>
-                            </th>
-                            <th onclick="sortTable('${repo.id}', 'created')" class="sortable">
-                                Created
-                                <i class="fas fa-sort sort-icon"></i>
-                            </th>
-                            <th onclick="sortTable('${repo.id}', 'updated')" class="sortable">
-                                Updated
-                                <i class="fas fa-sort sort-icon"></i>
-                            </th>
-                        </tr>
+                        ${tableHeaders}
                     </thead>
                     <tbody>
                         ${itemRows}
@@ -522,17 +547,26 @@ class DashboardSPA {
     }
     
     generateItemRow(item) {
-        // Generate table row for an issue or PR
+        const isPR = (this.state.dataType === 'prs') || (item.item_type === 'pr');
+        if (isPR) {
+            return this.generatePRRow(item);
+        }
+        return this.generateIssueRow(item);
+    }
+
+    generateIssueRow(item) {
         const labels = this.generateLabelsHTML(item.labels || []);
         const assignee = this.generateAssigneeHTML(item.assignee);
-        const createdDate = this.formatDate(item.created_at);
-        const updatedDate = this.formatDate(item.updated_at);
-        
-        // Prepare modal data attribute (matching the existing format)
+    const createdDate = this.formatDate(item.created_at);
+    const updatedDate = this.formatDate(item.updated_at);
+    const createdBadge = this.renderDateBadge(item.created_at);
+    const updatedBadge = this.renderDateBadge(item.updated_at);
+
         const modalData = {
+            repo: item.repository || item.repo,
             number: item.number,
             title: item.title,
-            html_url: item.html_url,
+            htmlUrl: item.html_url,
             body: item.body || '',
             triage: item.triage || '0',
             priority: item.priority || '0',
@@ -541,33 +575,149 @@ class DashboardSPA {
             labels: Array.isArray(item.labels) ? item.labels : (item.labels ? JSON.parse(item.labels) : []),
             mentions: item.mentions || []
         };
-        
+
         return `
-        <tr data-modal-data='${JSON.stringify(modalData).replace(/'/g, "&apos;")}' 
+    <tr data-repo="${this.escapeHtml(item.repository || item.repo || '')}"
+            data-modal-data='${JSON.stringify(modalData).replace(/'/g, "&apos;")}'
             data-number="${item.number}"
             data-title="${this.escapeHtml(item.title)}"
             data-assignee="${assignee ? this.escapeHtml(assignee) : ''}"
             data-created="${item.created_at}"
             data-updated="${item.updated_at}"
+            data-state="${item.state || ''}"
             data-triage="${item.triage || '0'}"
             data-priority="${item.priority || '0'}"
-            onclick="openIssueModalFromData(this); return false;" 
+            onclick="openIssueModalFromData(this); return false;"
             style="cursor: pointer;">
-            <td>
-                <a href="${item.html_url}" target="_blank" onclick="event.stopPropagation();">
-                    #${item.number}
-                </a>
-            </td>
-            <td>
-                <strong>${this.escapeHtml(item.title)}</strong>
-                ${item.state === 'closed' ? '<span class="badge badge-danger ml-2">Closed</span>' : ''}
-            </td>
+            <td><a href="${item.html_url}" target="_blank" onclick="event.stopPropagation();">#${item.number}</a></td>
+            <td><strong>${this.escapeHtml(item.title)}</strong>${item.state === 'closed' ? '<span class="badge badge-danger ml-2">Closed</span>' : ''}</td>
             <td>${labels}</td>
             <td>${assignee}</td>
-            <td>${createdDate}</td>
-            <td>${updatedDate}</td>
-        </tr>
-        `;
+            <td>${createdBadge}</td>
+            <td>${updatedBadge}</td>
+        </tr>`;
+    }
+
+    generatePRRow(item) {
+    const updatedDate = this.formatDate(item.updated_at);
+    const createdDate = this.formatDate(item.created_at);
+    const createdBadge = this.renderDateBadge(item.created_at);
+    const updatedBadge = this.renderDateBadge(item.updated_at);
+
+        // Prefer explicit user_login from sync service; fallback to user object/string or author
+        let authorLogin = '';
+        if (item.user_login) {
+            authorLogin = item.user_login;
+        } else if (item.user) {
+            authorLogin = (typeof item.user === 'string') ? item.user : (item.user && item.user.login ? item.user.login : '');
+        } else if (item.author) {
+            authorLogin = (typeof item.author === 'string') ? item.author : (item.author && item.author.login ? item.author.login : '');
+        }
+
+    // Map reviewers to array of login strings (requested_reviewers preferred)
+    const reviewersRaw = Array.isArray(item.requested_reviewers) ? item.requested_reviewers
+                  : (Array.isArray(item.reviewers) ? item.reviewers : []);
+    const reviewers = reviewersRaw.map(r => typeof r === 'string' ? r : (r && r.login ? r.login : '')).filter(Boolean);
+
+    // Assignees may be array of objects with login/html_url
+    const assigneesRaw = Array.isArray(item.assignees) ? item.assignees : [];
+
+        const labelsHTML = this.generateLabelsHTML(item.labels || []);
+    const reviewersHTML = this.generateUserBadgesHTML(reviewers);
+    const assigneesHTML = this.generateUserBadgesHTML(assigneesRaw);
+
+        const modalData = {
+            dataType: 'prs',
+            repo: item.repository || item.repo,
+            number: item.number,
+            title: item.title,
+            htmlUrl: item.html_url,
+            body: item.body || '',
+            author: authorLogin,
+            reviewers: reviewers,
+            status: item.state,
+            draft: !!item.draft,
+            merged: !!item.merged,
+            baseRef: item.base_ref || '',
+            headRef: item.head_ref || '',
+            labels: Array.isArray(item.labels) ? item.labels : (item.labels ? JSON.parse(item.labels) : []),
+            mentions: item.mentions || [],
+            comments: item.comments || ''
+        };
+
+        return `
+    <tr data-repo="${this.escapeHtml(item.repository || item.repo || '')}"
+            data-modal-data='${JSON.stringify(modalData).replace(/'/g, "&apos;")}'
+            data-number="${item.number}"
+            data-title="${this.escapeHtml(item.title)}"
+            data-created="${item.created_at}"
+            data-updated="${item.updated_at}"
+            data-state="${item.state || ''}"
+            onclick="openIssueModalFromData(this); return false;"
+            style="cursor: pointer;">
+            <td><a href="${item.html_url}" target="_blank" onclick="event.stopPropagation();">#${item.number}</a></td>
+            <td><strong>${this.escapeHtml(item.title)}</strong></td>
+            <td>${labelsHTML || '<span class="text-muted">None</span>'}</td>
+            <td>${authorLogin ? `<a href="https://github.com/${authorLogin}" target="_blank">@${authorLogin}</a>` : '<span class="text-muted">Unknown</span>'}</td>
+            <td>${reviewersHTML || '<span class="text-muted">None</span>'}</td>
+            <td>${assigneesHTML || '<span class="text-muted">None</span>'}</td>
+            <td>${createdBadge}</td>
+            <td>${updatedBadge}</td>
+        </tr>`;
+    }
+
+    // Weeks-based date badge helpers
+    getWeeksSince(dateStr) {
+        if (!dateStr) return null;
+        const now = new Date();
+        const then = new Date(dateStr);
+        const diffMs = now - then;
+        const weeks = Math.floor(diffMs / (1000 * 60 * 60 * 24 * 7));
+        return weeks < 0 ? 0 : weeks; // clamp
+    }
+
+    getDateBadgeClass(weeks) {
+        if (weeks === null || weeks === undefined) return 'date-unknown';
+        if (weeks <= 1) return 'date-fresh';
+        if (weeks <= 4) return 'date-warm';
+        if (weeks <= 12) return 'date-stale';
+        return 'date-old';
+    }
+
+    renderDateBadge(dateStr) {
+        if (!dateStr) return '<span class="text-muted">—</span>';
+        const weeks = this.getWeeksSince(dateStr);
+        const cls = this.getDateBadgeClass(weeks);
+        const label = isNaN(weeks) ? '—' : `${weeks}w`;
+        const formatted = this.formatDate(dateStr);
+        return `<span class="date-badge ${cls}" title="${formatted}">${label}</span> <span class="text-muted">${formatted}</span>`;
+    }
+
+    generateUserBadgesHTML(users) {
+        if (!users || users.length === 0) return '';
+        try {
+            // Normalize to list of {login, html_url}
+            const norm = users.map(u => {
+                if (typeof u === 'string') {
+                    return { login: u, html_url: `https://github.com/${u}` };
+                } else if (u && typeof u === 'object') {
+                    const login = u.login || '';
+                    const url = u.html_url || (login ? `https://github.com/${login}` : '#');
+                    return { login, html_url: url };
+                }
+                return null;
+            }).filter(Boolean);
+
+            // Limit to first 3 and show "+N" for the rest
+            const visible = norm.slice(0, 3);
+            const remaining = norm.length - visible.length;
+            const badges = visible.map(u => 
+                `<a href="${u.html_url}" target="_blank" class="badge badge-info mr-1">@${this.escapeHtml(u.login)}</a>`
+            ).join('');
+            return remaining > 0 ? `${badges}<span class="badge badge-light">+${remaining} more</span>` : badges;
+        } catch (e) {
+            return '';
+        }
     }
     
     generateLabelsHTML(labels) {
@@ -707,6 +857,11 @@ class DashboardSPA {
         
         // Handle additional categories by grouping them
         this.updateMultiCategoryDropdownMenu('react-dropdown-menu', ['react', 'react-native', 'angular']);
+        
+        console.log('Navbar dropdowns updated, repositories available:', this.state.repositories.length);
+        
+        // Initialize Bootstrap dropdowns after content is updated
+        this.initializeBootstrapDropdowns();
     }
     
     updateMultiCategoryDropdownMenu(dropdownId, categories) {
@@ -869,6 +1024,27 @@ class DashboardSPA {
             'other': '📦 Other'
         };
         return labels[classification] || labels['other'];
+    }
+    
+    initializeBootstrapDropdowns() {
+        // Initialize or re-initialize Bootstrap dropdowns after dynamic content is added
+        try {
+            // Use jQuery to initialize dropdowns (Bootstrap 4 syntax)
+            if (typeof $ !== 'undefined') {
+                const dropdownCount = $('.dropdown-toggle').length;
+                console.log('Found', dropdownCount, 'dropdown toggles to initialize');
+                
+                // Dispose existing dropdown instances first
+                $('.dropdown-toggle').dropdown('dispose');
+                // Re-initialize dropdowns
+                $('.dropdown-toggle').dropdown();
+                console.log('Bootstrap 4 dropdowns initialized via jQuery');
+            } else {
+                console.warn('jQuery not available - cannot initialize Bootstrap 4 dropdowns');
+            }
+        } catch (error) {
+            console.warn('Could not initialize Bootstrap dropdowns:', error);
+        }
     }
     
     updateVisibility() {
@@ -1115,6 +1291,13 @@ document.addEventListener('DOMContentLoaded', () => {
     
     dashboardSPA = new DashboardSPA();
     window.dashboardSPA = dashboardSPA; // Make it available globally
+    
+    // Initialize Bootstrap dropdowns on page load
+    if (dashboardSPA && dashboardSPA.initializeBootstrapDropdowns) {
+        setTimeout(() => {
+            dashboardSPA.initializeBootstrapDropdowns();
+        }, 100); // Small delay to ensure DOM is fully ready
+    }
 });
 
 // Global functions for backward compatibility with existing code

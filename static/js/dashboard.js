@@ -601,6 +601,7 @@ function fetchSyncStatus() {
 
 // Modal-related variables
 let currentModalIssue = null;
+let currentModalPR = null;
 
 // Initialize modal event handlers on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -625,6 +626,24 @@ document.addEventListener('DOMContentLoaded', function() {
         e.preventDefault();
         cleanupModalState();
     });
+
+    // Ensure "View on GitHub" buttons always open in a new tab from modals
+    const handleModalGitHubLinkClick = function(e) {
+        const anchor = e.target.closest('#modal-github-link, #modal-pr-github-link');
+        if (!anchor) return;
+        const href = anchor.getAttribute('href');
+        if (href && href !== '#') {
+            e.preventDefault();
+            e.stopPropagation();
+            try {
+                window.open(href, '_blank', 'noopener');
+            } catch (err) {
+                // Fallback to location change if popup blocked
+                window.location.href = href;
+            }
+        }
+    };
+    document.addEventListener('click', handleModalGitHubLinkClick, true);
 });
 
 // Function to clean up modal state - simplified
@@ -776,9 +795,9 @@ function openIssueModal(repo, number, title, htmlUrl, body, triage, priority, co
 // Function to open pull request modal
 function openPullRequestModal(modalData) {
     console.log('Opening PR modal with data:', modalData);
-    
-    // Store current PR data
-    currentModalIssue = {
+
+    // Store current PR data separately
+    currentModalPR = {
         repo: modalData.repo,
         number: modalData.number,
         title: modalData.title,
@@ -796,61 +815,68 @@ function openPullRequestModal(modalData) {
         mentions: modalData.mentions,
         comments: modalData.comments
     };
-    
-    // Update modal title and type indicator
-    document.getElementById('issueModalLabel').innerHTML = '<i class="fas fa-code-branch"></i> Pull Request Details';
-    
-    // Populate modal fields
-    document.getElementById('modal-issue-number').textContent = '#' + modalData.number;
-    document.getElementById('modal-github-link').href = modalData.htmlUrl;
-    document.getElementById('modal-issue-title').textContent = modalData.title;
-    
-    // Populate PR body/description
-    const bodyElement = document.getElementById('modal-issue-body');
-    if (modalData.body && modalData.body.trim()) {
-        bodyElement.textContent = modalData.body;
-        bodyElement.style.color = '#333';
-    } else {
-        bodyElement.textContent = 'No description provided.';
-        bodyElement.style.color = '#999';
-        bodyElement.style.fontStyle = 'italic';
+
+    // Update PR modal title
+    const prTitleEl = document.getElementById('prModalLabel');
+    if (prTitleEl) {
+        prTitleEl.innerHTML = '<i class="fas fa-code-branch"></i> Pull Request Details';
     }
-    
-    // Populate PR-specific information
+
+    // Populate PR modal fields
+    const prNumberEl = document.getElementById('modal-pr-number');
+    const prLinkEl = document.getElementById('modal-pr-github-link');
+    const prTitleTextEl = document.getElementById('modal-pr-title');
+    const prBodyEl = document.getElementById('modal-pr-body');
+
+    if (prNumberEl) prNumberEl.textContent = '#' + modalData.number;
+    if (prLinkEl) prLinkEl.href = modalData.htmlUrl;
+    if (prTitleTextEl) prTitleTextEl.textContent = modalData.title;
+
+    if (prBodyEl) {
+        if (modalData.body && modalData.body.trim()) {
+            prBodyEl.textContent = modalData.body;
+            prBodyEl.style.color = '#333';
+            prBodyEl.style.fontStyle = 'normal';
+        } else {
+            prBodyEl.textContent = 'No description provided.';
+            prBodyEl.style.color = '#999';
+            prBodyEl.style.fontStyle = 'italic';
+        }
+    }
+
+    // Populate PR-specific information targeting PR modal fields
     populatePRAuthor(modalData.author);
     populatePRReviewers(modalData.reviewers);
     populatePRStatus(modalData.status, modalData.draft, modalData.merged);
     populatePRBranches(modalData.baseRef, modalData.headRef);
-    
+
     // Populate common information for PRs
     populatePRLabels(modalData.labels);
     populatePRMentions(modalData.mentions);
-    
-    // Set comments
-    document.getElementById('modal-comments').value = modalData.comments || '';
-    
-    // Hide save button for PRs (they're read-only for now)
-    const saveBtn = document.getElementById('modal-save-btn');
-    saveBtn.style.display = 'none';
-    
-    // Ensure any existing modal is properly closed first
+
+    // Set PR comments
+    const prCommentsEl = document.getElementById('modal-pr-comments');
+    if (prCommentsEl) prCommentsEl.value = modalData.comments || '';
+
+    // Hide PR save button for now (read-only)
+    const prSaveBtn = document.getElementById('modal-pr-save-btn');
+    if (prSaveBtn) prSaveBtn.style.display = 'none';
+
+    // Ensure issue modal is closed first
     $('#issueModal').modal('hide');
-    
-    // Wait a moment then show the modal with simple Bootstrap configuration
+
+    // Show PR modal
     setTimeout(() => {
         console.log('🚀 Opening PR modal...');
-        
-        $('#issueModal').modal('show');
-        
-        // Simple event handling
-        $('#issueModal').on('shown.bs.modal', function() {
+        $('#prModal').modal('show');
+
+        $('#prModal').on('shown.bs.modal', function() {
             console.log('✅ PR modal shown successfully');
             $(this).find('input, textarea, select, button').first().focus();
         });
-        
-        // Simple cleanup when modal is closed
-        $('#issueModal').on('hidden.bs.modal', function() {
-            currentModalIssue = null;
+
+        $('#prModal').on('hidden.bs.modal', function() {
+            currentModalPR = null;
             $(this).off('shown.bs.modal hidden.bs.modal');
         });
     }, 100);

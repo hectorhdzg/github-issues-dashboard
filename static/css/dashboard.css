@@ -189,6 +189,13 @@ body {
     -moz-osx-font-smoothing: grayscale;
 }
 
+/* Widen main container to reduce column overlap */
+/* Center content and cap width to ~95% of viewport */
+.content-wrapper {
+    max-width: 95vw;
+    margin: 0 auto;
+}
+
 /* Content container with white background (specific to main content areas) */
 .content-container {
     background: #ffffff;
@@ -518,22 +525,17 @@ body {
 }
 
 /* Tables */
+/* Tables leverage Bootstrap defaults; keep minimal overrides */
 .issues-table {
     margin-bottom: 0;
-    table-layout: fixed;
     width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
 }
 
-.issues-table th {
-    background: #495057 !important;
-    color: white !important;
-    border-color: #495057 !important;
-    font-weight: 600;
+/* Keep sticky headers but use Bootstrap thead-light background */
+.issues-table thead th {
     position: sticky;
-    top: 0px;
-    z-index: 100;
+    top: 0;
+    z-index: 1;
 }
 
 .issues-table th.sortable {
@@ -542,9 +544,8 @@ body {
     transition: background-color 0.2s;
 }
 
-.issues-table th.sortable:hover {
-    background: #6c757d !important;
-}
+/* Indicate interactivity on sortable headers */
+.issues-table th.sortable:hover { opacity: 0.85; }
 
 .sort-icon {
     margin-left: 0.5rem;
@@ -562,21 +563,63 @@ body {
     opacity: 1;
 }
 
-.issues-table td {
-    vertical-align: middle;
-    padding-top: 0.75rem;
-    padding-bottom: 0.75rem;
-}
+.issues-table td { vertical-align: middle; }
 
 /* Table column widths */
-.issues-table th:nth-child(1) { width: 5%; }  /* Edit */
-.issues-table th:nth-child(2) { width: 35%; } /* Title */
-.issues-table th:nth-child(3) { width: 10%; } /* Assignee */
-.issues-table th:nth-child(4) { width: 12%; } /* Labels */
-.issues-table th:nth-child(5) { width: 8%; }  /* Created */
-.issues-table th:nth-child(6) { width: 8%; }  /* Updated */
-.issues-table th:nth-child(7) { width: 4%; text-align: center; }  /* Triage */
-.issues-table th:nth-child(8) { width: 8%; } /* Priority */
+/* Default column widths for issues table layout */
+.issues-table th:nth-child(1) { width: 6%; }
+.issues-table th:nth-child(2) { width: 34%; }
+.issues-table th:nth-child(3) { width: 14%; }
+.issues-table th:nth-child(4) { width: 16%; }
+.issues-table th:nth-child(5) { width: 12%; }
+.issues-table th:nth-child(6) { width: 12%; }
+.issues-table th:nth-child(7) { width: 6%; }
+.issues-table th:nth-child(8) { width: 8%; }
+
+/* PR table layout: Number | Title | Labels | Author | Reviewers | Assignees | Created | Updated */
+.issues-table.prs th:nth-child(1) { width: 6%; }
+.issues-table.prs th:nth-child(2) { width: 28%; }
+.issues-table.prs th:nth-child(3) { width: 16%; }
+.issues-table.prs th:nth-child(4) { width: 10%; }
+.issues-table.prs th:nth-child(5) { width: 14%; }
+.issues-table.prs th:nth-child(6) { width: 12%; }
+.issues-table.prs th:nth-child(7) { width: 7%; }
+.issues-table.prs th:nth-child(8) { width: 7%; }
+
+/* Prevent text overlap by wrapping where needed */
+.issues-table td, .issues-table th { word-wrap: break-word; word-break: break-word; }
+
+/* Make labels and badges wrap neatly */
+.issues-table .badge { white-space: nowrap; }
+.issues-table td:nth-child(3) .badge { white-space: normal; }
+
+/* Removed age-based row coloring; using per-cell date badges instead */
+
+/* Date badges (weeks) */
+.date-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    margin-right: 0.25rem;
+}
+.date-fresh { background-color: #e6ffed; color: #176f2c; border: 1px solid #b7ebc6; }
+.date-warm  { background-color: #fff5b1; color: #8a6d3b; border: 1px solid #ffe58f; }
+.date-stale { background-color: #fde2ff; color: #6f42c1; border: 1px solid #e9d8fd; }
+.date-old   { background-color: #ffeef0; color: #86181d; border: 1px solid #f5c6cb; }
+.date-unknown { background-color: #f1f3f5; color: #495057; border: 1px solid #dee2e6; }
+
+/* Responsive adjustments */
+@media (max-width: 1200px) {
+    .container-main { max-width: 98% !important; }
+    .issues-table.prs th:nth-child(2) { width: 26%; }
+    .issues-table.prs th:nth-child(3) { width: 18%; }
+}
+
+@media (max-width: 992px) {
+    .issues-table { table-layout: auto; }
+}
 
 /* Issue styling */
 .issue-title {
@@ -744,12 +787,7 @@ body {
     transition: all 0.2s ease;
 }
 
-/* Age-based styling */
-.recent { background-color: #c6f6d5 !important; }
-.medium { background-color: #fefcbf !important; }
-.old { background-color: #fed7d7 !important; }
-.stale { background-color: #e9d8fd !important; }
-.unknown { background-color: #f7fafc !important; }
+/* Removed legacy age-based row classes (.recent, .medium, .old, .stale, .unknown) */
 
 /* Legend */
 .legend {

@@ -21,8 +21,12 @@
     {% include 'components/navbar.html' %}
     
     <!-- Main Content -->
-    <div class="container mt-4">
-        {% block content %}{% endblock %}
+    <div class="container-fluid mt-4">
+        <div class="row justify-content-center">
+            <div class="col-12 content-wrapper">
+                {% block content %}{% endblock %}
+            </div>
+        </div>
     </div>
     
     <!-- Modals -->

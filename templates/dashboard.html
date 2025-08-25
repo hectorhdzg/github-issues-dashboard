@@ -85,20 +85,9 @@
     </div>
 </div>
 
-<!-- Include Issue Modal Component -->
-{% include 'components/issue_modal.html' %}
 {% endblock %}
 
 {% block extra_scripts %}
-<!-- Template Variables -->
-<script>
-    // Global variables from Flask template
-    var selectedRepoFromTemplate = '{{ selected_repo }}';
-    var currentDataTypeFromTemplate = '{{ data_type }}';
-    var syncStatsInProgress = {{ 'true' if sync_stats.in_progress else 'false' }};
-    var syncStatsErrors = {{ sync_stats.errors or 0 }};
-</script>
-
 <!-- SPA JavaScript (integrated with original dashboard.js) -->
 <script src="{{ url_for('static', filename='js/spa.js') }}"></script>
 {% endblock %}

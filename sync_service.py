@@ -30,13 +30,6 @@ try:
 except ImportError:
     pass
 
-# Resolve app paths and default database location robustly
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.normpath(os.path.join(BASE_DIR, '..'))
-DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
-os.makedirs(DATA_DIR, exist_ok=True)
-DEFAULT_DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(DATA_DIR, 'github_issues.db'))
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -47,13 +40,7 @@ logger = logging.getLogger(__name__)
 class GitHubSyncService:
     """GitHub data synchronization service with REST API endpoints"""
     
-    def __init__(self, db_path: str = DEFAULT_DB_PATH):
-        # Ensure the directory for the database exists
-        try:
-            os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        except Exception:
-            # If directory creation fails, proceed; sqlite will raise on connect
-            pass
+    def __init__(self, db_path='github_issues.db'):
         self.db_path = db_path
         self.sync_in_progress = False
         self.sync_lock = threading.Lock()

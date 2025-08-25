@@ -510,16 +510,22 @@ python test_repo_api.py
 
 ## 🚀 Deployment
 
-### Local Development
-Use the startup scripts or manual service start as described in Quick Start.
-
-### Azure Container Apps
-Infrastructure files are provided in the `infra/` directory for Azure deployment.
+### Azure Deployment (Automated)
+Deploy to Azure with a single command:
 
 ```bash
-# Deploy to Azure
+# Deploy everything automatically
 azd up
 ```
+
+This includes:
+- Infrastructure provisioning (App Service, Storage, Monitoring)
+- Database initialization with 20+ repositories
+- Application deployment with production configuration
+- Repository setup (Azure SDK, OpenTelemetry, Application Insights)
+
+### Local Development
+Use the startup scripts for local development as described in Quick Start.
 
 ## 🐛 Troubleshooting
 
@@ -905,34 +911,24 @@ GitHub-Issues-Dashboard/
 
 ## 🚀 Deployment
 
-### Azure App Service
-1. **Configure Azure resources**
-   ```bash
-   azd init
-   azd up
-   ```
+### Azure App Service (Automated)
+Deploy with a single command - everything is automated:
 
-2. **Set environment variables in Azure**
-   - `GITHUB_TOKEN`: Your GitHub personal access token
-   - `FLASK_ENV`: production
+```bash
+azd up
+```
 
-### Manual Deployment
-1. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+This automatically:
+- Creates Azure infrastructure (App Service, Storage, Monitoring)
+- Initializes database with 20+ pre-configured repositories
+- Deploys application with production settings
+- Sets up monitoring and health checks
 
-2. **Configure production settings**
-   ```bash
-   export FLASK_ENV=production
-   export GITHUB_TOKEN=your_token_here
-   ```
-
-3. **Start services**
-   ```bash
-   python sync_service.py &
-   python app.py
-   ```
+Optional: Set GitHub token for better rate limits:
+```bash
+azd env set GITHUB_TOKEN "your_github_token_here"
+azd up
+```
 
 ## 🛠️ Development
 
@@ -1062,63 +1058,38 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## ☁️ Azure Deployment
 
-### Option 1: Azure Developer CLI (Recommended)
+### Automated Azure Deployment
 
-1. **Install AZD**:
-   ```bash
-   # Windows
-   winget install microsoft.azd
-   
-   # macOS
-   brew tap azure/azd && brew install azd
-   
-   # Linux
-   curl -fsSL https://aka.ms/install-azd.sh | bash
-   ```
+**One-command deployment** - everything is automated:
 
-2. **Login to Azure**:
-   ```bash
-   azd auth login
-   ```
+```bash
+# Install Azure Developer CLI if needed
+winget install microsoft.azd  # Windows
+# brew tap azure/azd && brew install azd  # macOS
+# curl -fsSL https://aka.ms/install-azd.sh | bash  # Linux
 
-3. **Initialize and deploy**:
-   ```bash
-   azd up
-   ```
+# Login and deploy
+azd auth login
+azd up
+```
 
-4. **Configure GitHub token** (optional but recommended):
-   - Go to your App Service → Configuration → Application settings
-   - Add `GITHUB_TOKEN` with your GitHub personal access token
-   - Restart the app service
-   
-   **Note**: Without a token, the app runs in unauthenticated mode with 60 requests/hour limit.
+**That's it!** The deployment automatically:
+- ✅ Creates all Azure infrastructure
+- ✅ Initializes database with 20+ repositories
+- ✅ Configures production environment
+- ✅ Sets up monitoring and health checks
 
-### Option 2: Manual Azure Deployment
+**Optional**: Set GitHub token for better rate limits:
+```bash
+azd env set GITHUB_TOKEN "your_github_token_here"
+azd up
+```
 
-1. **Deploy infrastructure** using Azure CLI:
-   ```bash
-   az login
-   az group create --name rg-github-dashboard --location eastus
-   az deployment group create \
-     --resource-group rg-github-dashboard \
-     --template-file infra/main.bicep \
-     --parameters githubToken="your_token_here"
-   ```
-
-2. **Deploy application code**:
-   - Use Azure App Service deployment center
-   - Connect to your GitHub repository
-   - Configure automatic deployments
-
-### Environment Variables
-
-The following environment variables can be configured:
-
-**Required**: None (app works without any environment variables)
-
-**Optional**:
-- `GITHUB_TOKEN`: GitHub Personal Access Token for enhanced API access (5000 vs 60 requests/hour)
-- `APPLICATIONINSIGHTS_CONNECTION_STRING`: Azure Application Insights connection string for telemetry
+### What Gets Deployed
+- **Repositories**: 20+ pre-configured (Azure SDK, OpenTelemetry, App Insights)
+- **Infrastructure**: App Service, Storage, Application Insights, Log Analytics
+- **Configuration**: Production-ready settings with monitoring
+- **Database**: SQLite with schema and repository metadata
 
 ## 📱 Usage
 

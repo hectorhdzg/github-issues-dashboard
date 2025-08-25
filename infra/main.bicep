@@ -130,7 +130,7 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
     publicNetworkAccess: 'Enabled'
     siteConfig: {
       linuxFxVersion: 'PYTHON|3.11' // Use Python 3.11 runtime
-      appCommandLine: 'gunicorn --bind=0.0.0.0 --timeout 600 app:app'
+      appCommandLine: 'bash startup.sh'
       alwaysOn: true
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -184,9 +184,37 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
           name: 'AZURE_MONITOR_DISABLE_OFFLINE_STORAGE'
           value: 'false'
         }
+        // GitHub API Configuration
         {
           name: 'GITHUB_TOKEN'
           value: githubToken
+        }
+        // Database Configuration
+        {
+          name: 'DATABASE_PATH'
+          value: '/home/site/wwwroot/data/github_issues.db'
+        }
+        // Flask Configuration for Azure
+        {
+          name: 'FLASK_HOST'
+          value: '0.0.0.0'
+        }
+        {
+          name: 'FLASK_DEBUG'
+          value: flaskDebug
+        }
+        {
+          name: 'FLASK_ENV'
+          value: flaskEnv
+        }
+        // Auto-initialization Configuration
+        {
+          name: 'AUTO_INIT_REPOS'
+          value: 'true'
+        }
+        {
+          name: 'AUTO_START_SYNC'
+          value: 'false'
         }
         // Authentication is disabled - open access
         {
@@ -200,6 +228,120 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
       ]
     }
   }
+}
+
+// Create Storage Account for deployment scripts
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+  name: 'azghd${take(resourceToken, 8)}st'
+  location: location
+  tags: {
+    'azd-env-name': environmentName
+  }
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    accessTier: 'Hot'
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: true
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+// Create deployment script to initialize repositories
+resource repositorySetupScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
+  name: '${appServiceName}-repo-setup'
+  location: location
+  tags: {
+    'azd-env-name': environmentName
+  }
+  kind: 'AzurePowerShell'
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${managedIdentity.id}': {}
+    }
+  }
+  properties: {
+    azPowerShellVersion: '9.0'
+    retentionInterval: 'PT4H' // Keep for 4 hours
+    timeout: 'PT30M' // 30 minute timeout
+    cleanupPreference: 'OnSuccess'
+    storageAccountSettings: {
+      storageAccountName: storageAccount.name
+      storageAccountKey: storageAccount.listKeys().keys[0].value
+    }
+    scriptContent: '''
+      # Repository Setup Script for GitHub Issues Dashboard
+      Write-Output "Starting repository setup for GitHub Issues Dashboard..."
+      
+      # Wait for App Service deployment to complete
+      Start-Sleep -Seconds 60
+      
+      $appServiceName = "${appServiceName}"
+      $resourceGroupName = "${resourceGroupName}"
+      
+      Write-Output "App Service: $appServiceName"
+      Write-Output "Resource Group: $resourceGroupName"
+      
+      try {
+        # Trigger the repository setup via the App Service
+        $appUrl = "https://${appServiceName}.azurewebsites.net"
+        Write-Output "App URL: $appUrl"
+        
+        # Wait for app to be ready
+        $maxAttempts = 10
+        $attempt = 0
+        $appReady = $false
+        
+        while ($attempt -lt $maxAttempts -and -not $appReady) {
+          try {
+            $response = Invoke-WebRequest -Uri "$appUrl/health" -TimeoutSec 30 -ErrorAction SilentlyContinue
+            if ($response.StatusCode -eq 200) {
+              $appReady = $true
+              Write-Output "App is ready!"
+            }
+          } catch {
+            Write-Output "App not ready yet, attempt $($attempt + 1)/$maxAttempts"
+            Start-Sleep -Seconds 30
+          }
+          $attempt++
+        }
+        
+        if ($appReady) {
+          Write-Output "Triggering repository initialization..."
+          # The app will auto-initialize repositories on startup via AUTO_INIT_REPOS environment variable
+          # Just need to make a request to wake it up
+          $initResponse = Invoke-WebRequest -Uri "$appUrl/api/data/repositories" -TimeoutSec 60 -ErrorAction SilentlyContinue
+          Write-Output "Repository initialization triggered. Status: $($initResponse.StatusCode)"
+        } else {
+          Write-Output "App did not become ready within timeout period"
+          exit 1
+        }
+        
+        Write-Output "Repository setup completed successfully!"
+      } catch {
+        Write-Output "Error during setup: $($_.Exception.Message)"
+        exit 1
+      }
+    '''
+    environmentVariables: [
+      {
+        name: 'appServiceName'
+        value: appServiceName
+      }
+      {
+        name: 'resourceGroupName'
+        value: resourceGroupName
+      }
+    ]
+  }
+  dependsOn: [
+    appService
+    appServiceDiagnosticSettings
+  ]
 }
 
 // Create diagnostic settings for the App Service

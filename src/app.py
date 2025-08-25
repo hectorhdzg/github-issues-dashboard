@@ -18,10 +18,20 @@ import uuid
 # Import HTTP client for sync service communication
 import requests
 
-# Load environment variables from .env file
+# Azure deployment configuration
+IS_AZURE = bool(os.environ.get('WEBSITE_SITE_NAME'))
+APP_ROOT = os.environ.get('HOME', '/home') + '/site/wwwroot' if IS_AZURE else os.getcwd()
+DATA_DIR = os.path.join(APP_ROOT, 'data')
+DATABASE_PATH = os.environ.get('DATABASE_PATH', os.path.join(DATA_DIR, 'github_issues.db'))
+
+# Ensure data directory exists
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Load environment variables from .env file (for local development)
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    if not IS_AZURE:  # Only load .env in local development
+        load_dotenv()
 except ImportError:
     pass  # dotenv not available, continue without it
 
@@ -219,7 +229,12 @@ def get_sync_client_instance():
     """Get or create sync service client"""
     global sync_client
     if sync_client is None:
-        sync_service_url = os.environ.get('SYNC_SERVICE_URL', 'http://127.0.0.1:5001')
+        if IS_AZURE:
+            # In Azure, sync service runs on the same host/port
+            sync_service_url = f"http://localhost:{os.environ.get('PORT', 8000)}"
+        else:
+            # Local development uses separate service
+            sync_service_url = os.environ.get('SYNC_SERVICE_URL', 'http://127.0.0.1:5001')
         sync_client = SyncServiceClient(base_url=sync_service_url)
     return sync_client
 
@@ -699,6 +714,17 @@ def api_get_prs():
                 'error': str(e)
             }), 500
 
+@app.route('/health')
+def simple_health():
+    """Simple health check endpoint for deployment scripts"""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'GitHub Issues Dashboard',
+        'environment': 'azure' if IS_AZURE else 'local',
+        'database_exists': os.path.exists(DATABASE_PATH),
+        'timestamp': datetime.now(timezone.utc).isoformat()
+    })
+
 @app.route('/api/health')
 def api_health():
     """Health check endpoint"""
@@ -840,6 +866,13 @@ def api_dashboard_data():
             
             # Get sync stats
             sync_status = client.get_sync_status()
+
+            # Get repositories metadata to enrich frontend grouping/classification
+            repos_meta_resp = client.get_repositories()
+            repositories_metadata = []
+            if isinstance(repos_meta_resp, dict) and repos_meta_resp.get('success'):
+                # Use metadata from sync service; optionally filter to repos present in data
+                repositories_metadata = repos_meta_resp.get('repositories_metadata', []) or []
             
             # Sort by updated_at descending
             all_items.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
@@ -853,6 +886,7 @@ def api_dashboard_data():
                 'data': all_items,
                 'repositories': repositories_list,        # Repositories from actual data
                 'all_repositories': repositories_list,    # Same as repositories
+                'repositories_metadata': repositories_metadata,
                 'sdk_counts': sdk_counts,
                 'sync_stats': {
                     'in_progress': sync_status.get('sync_in_progress', False),
@@ -921,21 +955,52 @@ def internal_error(error):
                           format_datetime=format_datetime_for_display), 500
 
 if __name__ == '__main__':
-    # Get configuration from environment
-    host = os.environ.get('FLASK_HOST', '0.0.0.0')
-    port = int(os.environ.get('FLASK_PORT', 5000))
-    debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    # Azure-specific configuration
+    if IS_AZURE:
+        # In Azure App Service, use PORT environment variable
+        host = '0.0.0.0'
+        port = int(os.environ.get('PORT', 8000))
+        debug = False
+        
+        # Initialize database if it doesn't exist or if auto-init is requested
+        auto_init = os.environ.get('AUTO_INIT_REPOS', 'false').lower() == 'true'
+        if not os.path.exists(DATABASE_PATH) or auto_init:
+            try:
+                import sys
+                sys.path.append(os.path.join(APP_ROOT, 'scripts'))
+                from setup_deployment_repos import DeploymentRepositoryManager
+                
+                logger.info("Initializing database for Azure deployment...")
+                repo_manager = DeploymentRepositoryManager(DATABASE_PATH)
+                repo_manager.create_database_schema()
+                repo_manager.populate_repositories(force_update=auto_init)
+                
+                # Get repository summary
+                summary = repo_manager.get_repository_summary()
+                logger.info(f"Database initialized with {summary['total_configured']} repositories")
+                logger.info(f"Categories: {list(summary['by_category'].keys())}")
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize database: {e}")
+    else:
+        # Local development configuration
+        host = os.environ.get('FLASK_HOST', '127.0.0.1')
+        port = int(os.environ.get('FLASK_PORT', 5000))
+        debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
     
     logger.info(f"Starting GitHub Issues Dashboard on {host}:{port}")
+    logger.info(f"Environment: {'Azure' if IS_AZURE else 'Local'}")
+    logger.info(f"Database path: {DATABASE_PATH}")
     logger.info(f"Sync service URL: {os.environ.get('SYNC_SERVICE_URL', 'http://127.0.0.1:5001')}")
     logger.info(f"Using mock sync service: {os.environ.get('USE_MOCK_SYNC', 'False')}")
     
-    # Test sync service connection
-    try:
-        client = get_sync_client_instance()
-        health = client.health_check()
-        logger.info(f"Sync service status: {health.get('status', 'unknown')}")
-    except Exception as e:
-        logger.warning(f"Could not connect to sync service: {e}")
+    # Test sync service connection (only in local development)
+    if not IS_AZURE:
+        try:
+            client = get_sync_client_instance()
+            health = client.health_check()
+            logger.info(f"Sync service status: {health.get('status', 'unknown')}")
+        except Exception as e:
+            logger.warning(f"Could not connect to sync service: {e}")
     
     app.run(host=host, port=port, debug=debug)

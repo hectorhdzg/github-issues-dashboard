@@ -10,3 +10,7 @@ services:
     project: ./
     host: appservice
     language: python
+    env:
+      DATABASE_PATH: /home/site/wwwroot/data/github_issues.db
+      FLASK_HOST: 0.0.0.0
+      FLASK_DEBUG: false
