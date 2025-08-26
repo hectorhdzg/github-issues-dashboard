@@ -83,6 +83,26 @@ elif [ -d "/home/site/wwwroot/src" ]; then
 fi
 echo "Using working directory: $WORKDIR"
 
+# Diagnostics: print python info and module availability
+if command -v python3 >/dev/null 2>&1; then PYBIN=python3; else PYBIN=python; fi
+echo "Python binary: $(command -v $PYBIN || echo 'not found')"
+echo "Python version: $($PYBIN --version 2>&1 || echo 'n/a')"
+$PYBIN - <<'PY'
+import sys
+print('sys.executable:', sys.executable)
+print('sys.path:')
+for p in sys.path:
+    print(' -', p)
+def check(name):
+    try:
+        __import__(name)
+        print(f'MODULE OK: {name}')
+    except Exception as e:
+        print(f'MODULE MISSING: {name} -> {e}')
+for m in ('flask','requests','gunicorn'):
+    check(m)
+PY
+
 # Use gunicorn for production deployment
 exec gunicorn --bind=0.0.0.0:${PORT} \
     --workers=2 \
