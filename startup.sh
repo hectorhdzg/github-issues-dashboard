@@ -46,13 +46,33 @@ export PORT=${WEBSITES_PORT:-${PORT:-8000}}
 # Start the Flask application with gunicorn for production
 echo "Starting Flask application with gunicorn on port $PORT..."
 
-# Add vendored packages to PYTHONPATH if present (created by predeploy)
-VENDORED_PY="/home/site/wwwroot/.python_packages/lib/site-packages"
-if [ -d "$VENDORED_PY" ]; then
-    export PYTHONPATH="$VENDORED_PY:$PYTHONPATH"
-    echo "Using vendored packages at $VENDORED_PY"
+# Create a virtual environment in /home (writable) and install requirements (Linux wheels)
+VENV_DIR="/home/site/venv"
+if command -v python3 >/dev/null 2>&1; then
+    PYBIN="python3"
 else
-    echo "Warning: vendored packages not found at $VENDORED_PY"
+    PYBIN="python"
+fi
+
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Creating virtual environment at $VENV_DIR..."
+    "$PYBIN" -m venv "$VENV_DIR" || echo "Warning: venv creation failed"
+fi
+
+if [ -d "$VENV_DIR" ]; then
+    . "$VENV_DIR/bin/activate"
+    echo "Using Python: $(which python)"
+    echo "Python version: $(python --version 2>&1)"
+    echo "Pip version: $(pip --version 2>&1)"
+    if [ -f "$APP_ROOT/requirements.txt" ]; then
+        echo "Installing requirements from $APP_ROOT/requirements.txt into venv..."
+        pip install --no-cache-dir --upgrade -r "$APP_ROOT/requirements.txt" || echo "Warning: pip install requirements failed"
+    else
+        echo "requirements.txt not found; installing minimal deps"
+        pip install --no-cache-dir --upgrade flask gunicorn requests || echo "Warning: minimal pip install failed"
+    fi
+else
+    echo "Warning: venv directory missing; proceeding without venv"
 fi
 
 # Determine working directory containing src
@@ -64,8 +84,13 @@ elif [ -d "/home/site/wwwroot/src" ]; then
 fi
 echo "Using working directory: $WORKDIR"
 
-# Use gunicorn for production deployment (from PATH)
-exec gunicorn --bind=0.0.0.0:${PORT} \
+# Use gunicorn for production deployment (prefer venv bin)
+if [ -x "$VENV_DIR/bin/gunicorn" ]; then
+    GUNICORN_BIN="$VENV_DIR/bin/gunicorn"
+else
+    GUNICORN_BIN="gunicorn"
+fi
+exec "$GUNICORN_BIN" --bind=0.0.0.0:${PORT} \
     --workers=2 \
     --timeout=600 \
     --access-logfile=- \
