@@ -51,24 +51,32 @@ PACKAGE_DIR="/home/site/packages"
 export PYTHONPATH="$PACKAGE_DIR:${PYTHONPATH}"
 echo "Using PYTHONPATH: $PYTHONPATH"
 
-if [ -f "$APP_ROOT/requirements.txt" ]; then
-    if [ ! -d "$PACKAGE_DIR" ] || [ -z "$(ls -A "$PACKAGE_DIR" 2>/dev/null)" ]; then
-        echo "Installing Python packages to $PACKAGE_DIR..."
-        mkdir -p "$PACKAGE_DIR"
-        # Prefer python3 if available, fallback to python
-        if command -v python3 >/dev/null 2>&1; then
-            PYBIN="python3"
-        else
-            PYBIN="python"
-        fi
-        "$PYBIN" -m pip install --no-cache-dir --upgrade -r "$APP_ROOT/requirements.txt" --target "$PACKAGE_DIR" || {
-            echo "Error: pip install failed" >&2
+# Install a minimal set of packages required to boot the app quickly
+if [ ! -d "$PACKAGE_DIR" ] || [ -z "$(ls -A "$PACKAGE_DIR" 2>/dev/null)" ]; then
+    echo "Installing minimal Python packages to $PACKAGE_DIR..."
+    mkdir -p "$PACKAGE_DIR"
+    if command -v python3 >/dev/null 2>&1; then
+        PYBIN="python3"
+    else
+        PYBIN="python"
+    fi
+    # If Flask is missing, install minimal deps; this pulls Jinja2, Werkzeug, etc.
+    "$PYBIN" - <<'PY'
+import importlib, sys
+mods = ["flask", "gunicorn", "requests"]
+missing = [m for m in mods if importlib.util.find_spec(m) is None]
+sys.exit(0 if not missing else 1)
+PY
+    if [ $? -ne 0 ]; then
+        echo "Installing: flask gunicorn requests"
+        "$PYBIN" -m pip install --no-cache-dir --upgrade flask gunicorn requests --target "$PACKAGE_DIR" || {
+            echo "Error: minimal pip install failed" >&2
         }
     else
-        echo "Python packages already present in $PACKAGE_DIR, skipping install."
+        echo "Minimal Python packages already available."
     fi
 else
-    echo "Warning: requirements.txt not found at $APP_ROOT/requirements.txt; skipping package install."
+    echo "Python packages already present in $PACKAGE_DIR, skipping install."
 fi
 
 # Determine working directory containing src
