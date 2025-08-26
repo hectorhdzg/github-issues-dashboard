@@ -67,17 +67,24 @@ echo "Using Python: $(which python)"
 echo "Python version: $(python --version 2>&1)"
 echo "Pip version: $(pip --version 2>&1)"
 
-# Install full requirements to the venv (cached in /home)
-if [ -f "$APP_ROOT/requirements.txt" ]; then
-    echo "Installing requirements from $APP_ROOT/requirements.txt into venv..."
-    pip install --no-cache-dir --upgrade -r "$APP_ROOT/requirements.txt" || {
-        echo "Error: pip install requirements failed" >&2
-    }
-else
-    echo "Warning: requirements.txt not found at $APP_ROOT/requirements.txt; installing minimal deps"
-    pip install --no-cache-dir --upgrade flask gunicorn requests || {
-        echo "Error: minimal pip install failed" >&2
-    }
+# Install minimal dependencies only if missing to reduce startup time
+python - <<'PY'
+import importlib, sys
+mods = ["flask", "requests", "gunicorn"]
+missing = [m for m in mods if importlib.util.find_spec(m) is None]
+print("MISSING:" + ",".join(missing))
+PY
+MISSING=$(tail -n 1)
+if [[ "$MISSING" == MISSING:* ]]; then
+    PKGS=${MISSING#MISSING:}
+    if [ -n "$PKGS" ]; then
+        echo "Installing missing packages into venv: $PKGS"
+        pip install --no-cache-dir --upgrade $PKGS || {
+            echo "Error: pip install failed for $PKGS" >&2
+        }
+    else
+        echo "All minimal packages already installed."
+    fi
 fi
 
 # Determine working directory containing src
