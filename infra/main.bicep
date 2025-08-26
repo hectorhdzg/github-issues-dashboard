@@ -21,6 +21,12 @@ param flaskDebug string = 'false'
 @secure()
 param githubToken string = ''
 
+@description('Enable diagnostic settings on the App Service')
+param enableDiagnostics bool = true
+
+@description('Enable one-time repository setup deployment script')
+param enableRepoSetup bool = false
+
 // Generate a unique token for resource naming (required format)
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location, environmentName)
 var resourcePrefix = 'ghd' // GitHub Dashboard prefix (≤ 3 characters)
@@ -130,7 +136,8 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
     publicNetworkAccess: 'Enabled'
     siteConfig: {
       linuxFxVersion: 'PYTHON|3.11' // Use Python 3.11 runtime
-      appCommandLine: 'bash startup.sh'
+  // Use absolute path to startup script so Oryx invokes correctly regardless of working dir
+  appCommandLine: '/bin/bash /home/site/wwwroot/startup.sh'
       alwaysOn: true
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -140,16 +147,16 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
       }
       appSettings: [
         {
-          name: 'FLASK_ENV'
-          value: flaskEnv
-        }
-        {
-          name: 'FLASK_DEBUG'
-          value: flaskDebug
-        }
-        {
           name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
           value: 'true'
+        }
+        {
+          name: 'ENABLE_ORYX_BUILD'
+          value: 'true'
+        }
+        {
+          name: 'WEBSITE_RUN_FROM_PACKAGE'
+          value: '1'
         }
         {
           name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
@@ -165,7 +172,7 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
         }
         {
           name: 'WEBSITES_PORT'
-          value: '5000'
+          value: '8000'
         }
         // OpenTelemetry Configuration
         {
@@ -192,22 +199,9 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
         // Database Configuration
         {
           name: 'DATABASE_PATH'
-          value: '/home/site/wwwroot/data/github_issues.db'
+          value: '/home/site/data/github_issues.db'
         }
-        // Flask Configuration for Azure
-        {
-          name: 'FLASK_HOST'
-          value: '0.0.0.0'
-        }
-        {
-          name: 'FLASK_DEBUG'
-          value: flaskDebug
-        }
-        {
-          name: 'FLASK_ENV'
-          value: flaskEnv
-        }
-        // Auto-initialization Configuration
+  // Auto-initialization Configuration
         {
           name: 'AUTO_INIT_REPOS'
           value: 'true'
@@ -231,8 +225,9 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
 }
 
 // Create Storage Account for deployment scripts
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
-  name: 'azghd${take(resourceToken, 8)}st'
+// Use latest stable API and a longer unique suffix to avoid global name collisions
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: 'azghd${take(resourceToken, 16)}st'
   location: location
   tags: {
     'azd-env-name': environmentName
@@ -250,8 +245,62 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   }
 }
 
+// Grant required data plane roles on the storage account to the user-assigned managed identity
+// Grant required data plane roles on the storage account to the user-assigned managed identity
+// Use resourceId() properties available at compile-time for name generation
+resource storageBlobDataOwnerRA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b', managedIdentity.name)
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b') // Storage Blob Data Owner
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageBlobDataContributorRA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe', managedIdentity.name)
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe') // Storage Blob Data Contributor
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageQueueDataContributorRA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, '974c5e8b-45b9-4653-ba55-5f855dd0fb88', managedIdentity.name)
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88') // Storage Queue Data Contributor
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageTableDataContributorRA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3', managedIdentity.name)
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3') // Storage Table Data Contributor
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Assign Monitoring Metrics Publisher at resource group scope
+resource monitoringMetricsPublisherRA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, '3913510d-42f4-4e42-8a64-420c390055eb', managedIdentity.name)
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb') // Monitoring Metrics Publisher
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Create deployment script to initialize repositories
-resource repositorySetupScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
+resource repositorySetupScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (enableRepoSetup) {
   name: '${appServiceName}-repo-setup'
   location: location
   tags: {
@@ -265,7 +314,7 @@ resource repositorySetupScript 'Microsoft.Resources/deploymentScripts@2023-08-01
     }
   }
   properties: {
-    azPowerShellVersion: '9.0'
+    azPowerShellVersion: '11.0'
     retentionInterval: 'PT4H' // Keep for 4 hours
     timeout: 'PT30M' // 30 minute timeout
     cleanupPreference: 'OnSuccess'
@@ -340,12 +389,11 @@ resource repositorySetupScript 'Microsoft.Resources/deploymentScripts@2023-08-01
   }
   dependsOn: [
     appService
-    appServiceDiagnosticSettings
   ]
 }
 
 // Create diagnostic settings for the App Service
-resource appServiceDiagnosticSettings 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource appServiceDiagnosticSettings 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enableDiagnostics) {
   name: '${appServiceName}-diagnostics'
   scope: appService
   properties: {
