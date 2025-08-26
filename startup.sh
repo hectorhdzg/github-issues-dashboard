@@ -52,31 +52,30 @@ export PYTHONPATH="$PACKAGE_DIR:${PYTHONPATH}"
 echo "Using PYTHONPATH: $PYTHONPATH"
 
 # Install a minimal set of packages required to boot the app quickly
-if [ ! -d "$PACKAGE_DIR" ] || [ -z "$(ls -A "$PACKAGE_DIR" 2>/dev/null)" ]; then
-    echo "Installing minimal Python packages to $PACKAGE_DIR..."
-    mkdir -p "$PACKAGE_DIR"
-    if command -v python3 >/dev/null 2>&1; then
-        PYBIN="python3"
-    else
-        PYBIN="python"
-    fi
-    # If Flask is missing, install minimal deps; this pulls Jinja2, Werkzeug, etc.
-    "$PYBIN" - <<'PY'
-import importlib, sys
+mkdir -p "$PACKAGE_DIR"
+if command -v python3 >/dev/null 2>&1; then
+    PYBIN="python3"
+else
+    PYBIN="python"
+fi
+
+# Determine which minimal modules are missing
+"$PYBIN" - <<'PY'
+import importlib, json
 mods = ["flask", "gunicorn", "requests"]
 missing = [m for m in mods if importlib.util.find_spec(m) is None]
-sys.exit(0 if not missing else 1)
+print(json.dumps(missing))
 PY
-    if [ $? -ne 0 ]; then
-        echo "Installing: flask gunicorn requests"
-        "$PYBIN" -m pip install --no-cache-dir --upgrade flask gunicorn requests --target "$PACKAGE_DIR" || {
-            echo "Error: minimal pip install failed" >&2
-        }
-    else
-        echo "Minimal Python packages already available."
-    fi
+MISSING=$(tail -n 1 | tr -d '\r')
+if [ -n "$MISSING" ] && [ "$MISSING" != "[]" ]; then
+    echo "Installing missing Python packages into $PACKAGE_DIR: $MISSING"
+    # shellcheck disable=SC2001
+    PKGS=$(echo "$MISSING" | sed 's/\[\|\]\|\"//g' | sed 's/,/ /g')
+    "$PYBIN" -m pip install --no-cache-dir --upgrade $PKGS --target "$PACKAGE_DIR" || {
+        echo "Error: minimal pip install failed for $PKGS" >&2
+    }
 else
-    echo "Python packages already present in $PACKAGE_DIR, skipping install."
+    echo "Minimal Python packages already available."
 fi
 
 # Determine working directory containing src
