@@ -46,45 +46,13 @@ export PORT=${WEBSITES_PORT:-${PORT:-8000}}
 # Start the Flask application with gunicorn for production
 echo "Starting Flask application with gunicorn on port $PORT..."
 
-# Use a dedicated virtual environment under /home/site/venv for dependencies
-VENV_DIR="/home/site/venv"
-if command -v python3 >/dev/null 2>&1; then
-    PYBIN="python3"
+# Add vendored packages to PYTHONPATH if present (created by predeploy)
+VENDORED_PY="/home/site/wwwroot/.python_packages/lib/site-packages"
+if [ -d "$VENDORED_PY" ]; then
+    export PYTHONPATH="$VENDORED_PY:$PYTHONPATH"
+    echo "Using vendored packages at $VENDORED_PY"
 else
-    PYBIN="python"
-fi
-
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating virtual environment at $VENV_DIR..."
-    "$PYBIN" -m venv "$VENV_DIR" || {
-        echo "Error: failed to create virtual environment" >&2
-    }
-fi
-
-# Activate the virtual environment
-. "$VENV_DIR/bin/activate"
-echo "Using Python: $(which python)"
-echo "Python version: $(python --version 2>&1)"
-echo "Pip version: $(pip --version 2>&1)"
-
-# Install minimal dependencies only if missing to reduce startup time
-python - <<'PY'
-import importlib, sys
-mods = ["flask", "requests", "gunicorn"]
-missing = [m for m in mods if importlib.util.find_spec(m) is None]
-print("MISSING:" + ",".join(missing))
-PY
-MISSING=$(tail -n 1)
-if [[ "$MISSING" == MISSING:* ]]; then
-    PKGS=${MISSING#MISSING:}
-    if [ -n "$PKGS" ]; then
-        echo "Installing missing packages into venv: $PKGS"
-        pip install --no-cache-dir --upgrade $PKGS || {
-            echo "Error: pip install failed for $PKGS" >&2
-        }
-    else
-        echo "All minimal packages already installed."
-    fi
+    echo "Warning: vendored packages not found at $VENDORED_PY"
 fi
 
 # Determine working directory containing src
@@ -96,13 +64,8 @@ elif [ -d "/home/site/wwwroot/src" ]; then
 fi
 echo "Using working directory: $WORKDIR"
 
-# Use gunicorn for production deployment (from venv)
-GUNICORN_BIN="$VENV_DIR/bin/gunicorn"
-if [ ! -x "$GUNICORN_BIN" ]; then
-    echo "Warning: gunicorn not found in venv, falling back to PATH"
-    GUNICORN_BIN="gunicorn"
-fi
-exec "$GUNICORN_BIN" --bind=0.0.0.0:${PORT} \
+# Use gunicorn for production deployment (from PATH)
+exec gunicorn --bind=0.0.0.0:${PORT} \
     --workers=2 \
     --timeout=600 \
     --access-logfile=- \
