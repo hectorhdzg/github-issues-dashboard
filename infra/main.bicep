@@ -135,9 +135,9 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
     clientAffinityEnabled: false
     publicNetworkAccess: 'Enabled'
     siteConfig: {
-      linuxFxVersion: 'PYTHON|3.11' // Use Python 3.11 runtime
-  // Use absolute path to startup script so Oryx invokes correctly regardless of working dir
-  appCommandLine: '/bin/bash /home/site/wwwroot/startup.sh'
+  linuxFxVersion: 'PYTHON|3.11' // Use Python 3.11 runtime
+  // Run gunicorn directly; Oryx will install dependencies during deployment
+  appCommandLine: 'gunicorn --bind=0.0.0.0:8000 --chdir /home/site/wwwroot/src app:app'
       alwaysOn: true
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
