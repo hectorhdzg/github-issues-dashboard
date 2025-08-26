@@ -15,17 +15,38 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import unquote, quote
 import uuid
 
-# Import HTTP client for sync service communication
-import requests
+# Import HTTP client for sync service communication (optional at startup)
+try:
+    import requests
+except Exception:
+    requests = None
 
 # Azure deployment configuration
 IS_AZURE = bool(os.environ.get('WEBSITE_SITE_NAME'))
-APP_ROOT = os.environ.get('HOME', '/home') + '/site/wwwroot' if IS_AZURE else os.getcwd()
-DATA_DIR = os.path.join(APP_ROOT, 'data')
-DATABASE_PATH = os.environ.get('DATABASE_PATH', os.path.join(DATA_DIR, 'github_issues.db'))
 
-# Ensure data directory exists
-os.makedirs(DATA_DIR, exist_ok=True)
+# On Azure with WEBSITE_RUN_FROM_PACKAGE, wwwroot is read-only. Use /home/site/data.
+if IS_AZURE:
+    default_data_dir = '/home/site/data'
+else:
+    default_data_dir = os.path.join(os.getcwd(), 'data')
+
+# Resolve paths relative to this file
+APP_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+# Resolve database path and data directory
+DATABASE_PATH = os.environ.get('DATABASE_PATH', os.path.join(default_data_dir, 'github_issues.db'))
+DATA_DIR = os.path.dirname(DATABASE_PATH)
+
+# Ensure data directory exists (should be writable: /home/site/data on Azure)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except Exception as e:
+    # Log later once logger is configured; for early init, just print to stderr as fallback
+    try:
+        import sys
+        print(f"Warning: failed to ensure data dir {DATA_DIR}: {e}", file=sys.stderr)
+    except Exception:
+        pass
 
 # Load environment variables from .env file (for local development)
 try:
@@ -106,6 +127,8 @@ class SyncServiceClient:
         self.base_url = base_url
         
     def health_check(self):
+        if requests is None:
+            return {"success": False, "error": "requests not available"}
         try:
             response = requests.get(f"{self.base_url}/health")
             if response.status_code == 200:
@@ -115,6 +138,8 @@ class SyncServiceClient:
             return {"success": False, "error": str(e)}
     
     def get_sync_status(self):
+        if requests is None:
+            return {"success": False, "error": "requests not available"}
         try:
             response = requests.get(f"{self.base_url}/api/sync/status")
             if response.status_code == 200:
@@ -124,6 +149,8 @@ class SyncServiceClient:
             return {"success": False, "error": str(e)}
     
     def get_issues(self, repo=None, limit=1000, **kwargs):
+        if requests is None:
+            return {"success": False, "error": "requests not available", "data": []}
         try:
             params = {'limit': limit}
             if repo:
@@ -136,6 +163,8 @@ class SyncServiceClient:
             return {"success": False, "error": str(e)}
     
     def get_prs(self, repo=None, limit=1000, **kwargs):
+        if requests is None:
+            return {"success": False, "error": "requests not available", "data": []}
         try:
             params = {'limit': limit}
             if repo:
@@ -148,6 +177,8 @@ class SyncServiceClient:
             return {"success": False, "error": str(e)}
     
     def get_repositories(self):
+        if requests is None:
+            return {"success": False, "error": "requests not available", "repositories": []}
         try:
             response = requests.get(f"{self.base_url}/api/data/repositories")
             if response.status_code == 200:
@@ -157,6 +188,8 @@ class SyncServiceClient:
             return {"success": False, "error": str(e)}
     
     def start_sync(self):
+        if requests is None:
+            return {"success": False, "error": "requests not available"}
         try:
             response = requests.post(f"{self.base_url}/api/sync/start")
             if response.status_code == 200:
@@ -167,6 +200,8 @@ class SyncServiceClient:
     
     def get_queue_status(self):
         """Get queue status from sync service"""
+        if requests is None:
+            return {"success": False, "error": "requests not available"}
         try:
             response = requests.get(f"{self.base_url}/api/queue/status")
             if response.status_code == 200:
@@ -177,6 +212,8 @@ class SyncServiceClient:
     
     def get_auth_status(self):
         """Get authentication status from sync service"""
+        if requests is None:
+            return {"success": False, "error": "requests not available"}
         try:
             response = requests.get(f"{self.base_url}/api/auth/status")
             if response.status_code == 200:
