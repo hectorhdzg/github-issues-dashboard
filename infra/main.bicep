@@ -151,6 +151,10 @@ resource appService 'Microsoft.Web/sites@2024-04-01' = {
           value: 'true'
         }
         {
+          name: 'WEBSITE_CONTAINER_START_TIME_LIMIT'
+          value: '1800'
+        }
+        {
           name: 'ENABLE_ORYX_BUILD'
           value: 'true'
         }

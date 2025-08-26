@@ -58,6 +58,22 @@ if [ -d "$ORYX_VENDOR_SITEPACKAGES" ]; then
     echo "Added to PYTHONPATH: $ORYX_VENDOR_SITEPACKAGES"
 fi
 
+    # Fallback: if core modules are still missing, install minimal packages into /home/site/packages
+    PY_FALLBACK_DIR="/home/site/packages"
+    python3 - <<'PY' || true
+    import importlib, sys
+    mods = ["flask", "requests", "gunicorn"]
+    missing = [m for m in mods if importlib.util.find_spec(m) is None]
+    sys.exit(1 if missing else 0)
+    PY
+    if [ $? -ne 0 ]; then
+        echo "Installing minimal packages into $PY_FALLBACK_DIR..."
+        mkdir -p "$PY_FALLBACK_DIR"
+        python3 -m pip install --no-cache-dir --upgrade flask requests gunicorn --target "$PY_FALLBACK_DIR" || echo "Warning: fallback pip install failed"
+        export PYTHONPATH="$PY_FALLBACK_DIR:$PYTHONPATH"
+        echo "Added to PYTHONPATH: $PY_FALLBACK_DIR"
+    fi
+
 # Determine working directory containing src
 WORKDIR="$APP_ROOT"
 if [ -d "$APP_ROOT/src" ]; then
