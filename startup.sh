@@ -46,36 +46,38 @@ export PORT=${WEBSITES_PORT:-${PORT:-8000}}
 # Start the Flask application with gunicorn for production
 echo "Starting Flask application with gunicorn on port $PORT..."
 
-# Ensure Python packages are available when running from package
-PACKAGE_DIR="/home/site/packages"
-export PYTHONPATH="$PACKAGE_DIR:${PYTHONPATH}"
-echo "Using PYTHONPATH: $PYTHONPATH"
-
-# Install a minimal set of packages required to boot the app quickly
-mkdir -p "$PACKAGE_DIR"
+# Use a dedicated virtual environment under /home/site/venv for dependencies
+VENV_DIR="/home/site/venv"
 if command -v python3 >/dev/null 2>&1; then
     PYBIN="python3"
 else
     PYBIN="python"
 fi
 
-# Determine which minimal modules are missing
-"$PYBIN" - <<'PY'
-import importlib, json
-mods = ["flask", "gunicorn", "requests"]
-missing = [m for m in mods if importlib.util.find_spec(m) is None]
-print(json.dumps(missing))
-PY
-MISSING=$(tail -n 1 | tr -d '\r')
-if [ -n "$MISSING" ] && [ "$MISSING" != "[]" ]; then
-    echo "Installing missing Python packages into $PACKAGE_DIR: $MISSING"
-    # shellcheck disable=SC2001
-    PKGS=$(echo "$MISSING" | sed 's/\[\|\]\|\"//g' | sed 's/,/ /g')
-    "$PYBIN" -m pip install --no-cache-dir --upgrade $PKGS --target "$PACKAGE_DIR" || {
-        echo "Error: minimal pip install failed for $PKGS" >&2
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Creating virtual environment at $VENV_DIR..."
+    "$PYBIN" -m venv "$VENV_DIR" || {
+        echo "Error: failed to create virtual environment" >&2
+    }
+fi
+
+# Activate the virtual environment
+. "$VENV_DIR/bin/activate"
+echo "Using Python: $(which python)"
+echo "Python version: $(python --version 2>&1)"
+echo "Pip version: $(pip --version 2>&1)"
+
+# Install full requirements to the venv (cached in /home)
+if [ -f "$APP_ROOT/requirements.txt" ]; then
+    echo "Installing requirements from $APP_ROOT/requirements.txt into venv..."
+    pip install --no-cache-dir --upgrade -r "$APP_ROOT/requirements.txt" || {
+        echo "Error: pip install requirements failed" >&2
     }
 else
-    echo "Minimal Python packages already available."
+    echo "Warning: requirements.txt not found at $APP_ROOT/requirements.txt; installing minimal deps"
+    pip install --no-cache-dir --upgrade flask gunicorn requests || {
+        echo "Error: minimal pip install failed" >&2
+    }
 fi
 
 # Determine working directory containing src
@@ -87,8 +89,13 @@ elif [ -d "/home/site/wwwroot/src" ]; then
 fi
 echo "Using working directory: $WORKDIR"
 
-# Use gunicorn for production deployment
-exec gunicorn --bind=0.0.0.0:${PORT} \
+# Use gunicorn for production deployment (from venv)
+GUNICORN_BIN="$VENV_DIR/bin/gunicorn"
+if [ ! -x "$GUNICORN_BIN" ]; then
+    echo "Warning: gunicorn not found in venv, falling back to PATH"
+    GUNICORN_BIN="gunicorn"
+fi
+exec "$GUNICORN_BIN" --bind=0.0.0.0:${PORT} \
     --workers=2 \
     --timeout=600 \
     --access-logfile=- \
