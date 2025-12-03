@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Start Flask Dashboard",
+			"type": "shell",
+			"command": "python src/app.py",
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}
