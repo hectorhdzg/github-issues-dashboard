@@ -1,0 +1,221 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Start GitHub Sync Service",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"src/app.py"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "dedicated",
+				"showReuseMessage": true,
+				"clear": false,
+				"group": "github-sync"
+			},
+			"isBackground": true,
+			"problemMatcher": [],
+			"runOptions": {
+				"instanceLimit": 1,
+				"reevaluateOnRerun": true
+			},
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"label": "Stop GitHub Sync Service",
+			"type": "shell",
+			"command": "taskkill",
+			"args": [
+				"/F",
+				"/IM",
+				"python.exe",
+				"/FI",
+				"WINDOWTITLE eq *src/app.py*"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Restart GitHub Sync Service",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Stop GitHub Sync Service",
+				"Start GitHub Sync Service"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Test Sync API",
+			"type": "shell",
+			"command": "curl",
+			"args": [
+				"-X",
+				"POST",
+				"http://localhost:8000/api/sync/full"
+			],
+			"group": "test",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Sync History",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"check_db.py"
+			],
+			"group": "test",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "GitHub Sync Service - Protected",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"start_service.py"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Test Full Sync",
+			"type": "shell",
+			"command": "curl",
+			"args": [
+				"-X",
+				"POST",
+				"http://localhost:8000/api/sync/full"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Test Sync and History",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"test_sync.py"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "GitHub Sync Service - Enhanced",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"start_service.py"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Test Enhanced Sync Metrics",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"test_enhanced_sync.py"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Test Individual Sync Endpoints",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"test_individual_sync.py"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Install APScheduler",
+			"type": "shell",
+			"command": "pip",
+			"args": [
+				"install",
+				"APScheduler==3.10.4"
+			],
+			"isBackground": false,
+			"group": "setup"
+		},
+		{
+			"label": "GitHub Sync Service - With Auto Sync",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"start_service.py"
+			],
+			"isBackground": true,
+			"group": "build"
+		},
+		{
+			"label": "Test Automatic Sync Scheduler",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"test_scheduler.py"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Quick API Test",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"-c",
+				"import requests; print(requests.get('http://localhost:8000/api/statistics').json())"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Start GitHub Sync Service",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"src/app.py"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

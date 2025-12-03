@@ -1,0 +1,358 @@
+# Azure DevOps Pipeline for GitHub Dashboard
+# This pipeline builds, tests, and deploys the GitHub Dashboard applications to Azure
+
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+  paths:
+    include:
+    - githubSync/**
+    - githubDashboard/**
+    - deployment/**
+
+pr:
+  branches:
+    include:
+    - main
+    - develop
+
+variables:
+  # Azure service connection (configured in Azure DevOps)
+  azureServiceConnection: 'azure-service-connection'
+  
+  # Environment-specific variables
+  ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/main') }}:
+    environment: 'prod'
+    resourceGroupName: 'rg-github-dashboard-prod'
+  ${{ elseif eq(variables['Build.SourceBranch'], 'refs/heads/develop') }}:
+    environment: 'staging'
+    resourceGroupName: 'rg-github-dashboard-staging'
+  ${{ else }}:
+    environment: 'dev'
+    resourceGroupName: 'rg-github-dashboard-dev'
+  
+  # Build variables
+  pythonVersion: '3.11'
+  azureLocation: 'East US'
+
+stages:
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+  - job: BuildTest
+    displayName: 'Build and Test Applications'
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    steps:
+    - task: UsePythonVersion@0
+      displayName: 'Use Python $(pythonVersion)'
+      inputs:
+        versionSpec: '$(pythonVersion)'
+        addToPath: true
+    
+    # Install dependencies for Sync Service
+    - task: Bash@3
+      displayName: 'Install Sync Service Dependencies'
+      inputs:
+        targetType: 'inline'
+        script: |
+          cd githubSync
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov flake8
+    
+    # Test Sync Service
+    - task: Bash@3
+      displayName: 'Test Sync Service'
+      inputs:
+        targetType: 'inline'
+        script: |
+          cd githubSync
+          # Run linting
+          flake8 src/ --max-line-length=120 --ignore=E501,W503
+          
+          # Run tests if they exist
+          if [ -f "tests/run_tests.py" ]; then
+            python tests/run_tests.py
+          fi
+          
+          # Run pytest if test files exist
+          if ls tests/test_*.py 1> /dev/null 2>&1; then
+            pytest tests/ --cov=src --cov-report=xml --cov-report=html
+          fi
+    
+    # Install dependencies for Dashboard
+    - task: Bash@3
+      displayName: 'Install Dashboard Dependencies'
+      inputs:
+        targetType: 'inline'
+        script: |
+          cd githubDashboard
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov flake8
+    
+    # Test Dashboard
+    - task: Bash@3
+      displayName: 'Test Dashboard'
+      inputs:
+        targetType: 'inline'
+        script: |
+          cd githubDashboard
+          # Run linting
+          flake8 src/ --max-line-length=120 --ignore=E501,W503
+          
+          # Run tests
+          if [ -f "tests/run_tests.py" ]; then
+            python tests/run_tests.py --unit
+          fi
+    
+    # Validate Bicep templates
+    - task: AzureCLI@2
+      displayName: 'Validate Bicep Templates'
+      inputs:
+        azureSubscription: '$(azureServiceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Validate main template
+          az deployment group validate \
+            --resource-group $(resourceGroupName) \
+            --template-file deployment/infra/main.bicep \
+            --parameters @deployment/infra/parameters/$(environment).parameters.json \
+            --parameters githubToken="dummy-token-for-validation"
+    
+    # Publish test results
+    - task: PublishTestResults@2
+      displayName: 'Publish Test Results'
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFiles: '**/test-*.xml'
+        testRunTitle: 'Python Tests'
+    
+    # Publish code coverage
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish Code Coverage'
+      condition: succeededOrFailed()
+      inputs:
+        codeCoverageTool: 'Cobertura'
+        summaryFileLocation: '**/coverage.xml'
+        reportDirectory: '**/htmlcov'
+    
+    # Create deployment artifacts
+    - task: ArchiveFiles@2
+      displayName: 'Archive Sync Service'
+      inputs:
+        rootFolderOrFile: 'githubSync'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/sync-service.zip'
+    
+    - task: ArchiveFiles@2
+      displayName: 'Archive Dashboard'
+      inputs:
+        rootFolderOrFile: 'githubDashboard'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/dashboard.zip'
+    
+    - task: CopyFiles@2
+      displayName: 'Copy Deployment Scripts'
+      inputs:
+        SourceFolder: 'deployment'
+        Contents: '**'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)/deployment'
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifacts'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'github-dashboard'
+
+- stage: Deploy
+  displayName: 'Deploy to Azure'
+  dependsOn: Build
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+  
+  jobs:
+  - deployment: DeployInfrastructure
+    displayName: 'Deploy Infrastructure'
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: '$(environment)'
+    
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: github-dashboard
+          
+          - task: AzureCLI@2
+            displayName: 'Setup Environment'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: 'pwsh'
+              scriptLocation: 'scriptPath'
+              scriptPath: '$(Pipeline.Workspace)/github-dashboard/deployment/scripts/setup-environment.ps1'
+              arguments: '-Environment $(environment) -Location "$(azureLocation)" -ResourceGroupName $(resourceGroupName)'
+          
+          - task: AzureCLI@2
+            displayName: 'Deploy Infrastructure'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: 'pwsh'
+              scriptLocation: 'scriptPath'
+              scriptPath: '$(Pipeline.Workspace)/github-dashboard/deployment/scripts/deploy.ps1'
+              arguments: '-Environment $(environment) -ResourceGroupName $(resourceGroupName) -GitHubToken "$(GITHUB_TOKEN)" -SkipBuild'
+            env:
+              GITHUB_TOKEN: $(github-token) # Secret variable configured in Azure DevOps
+  
+  - job: DeployApplications
+    displayName: 'Deploy Applications'
+    dependsOn: DeployInfrastructure
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    steps:
+    - download: current
+      artifact: github-dashboard
+    
+    # Get deployment outputs
+    - task: AzureCLI@2
+      displayName: 'Get Deployment Outputs'
+      inputs:
+        azureSubscription: '$(azureServiceConnection)'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Get the latest deployment outputs
+          DEPLOYMENT_NAME=$(az deployment group list \
+            --resource-group $(resourceGroupName) \
+            --query "[?starts_with(name, 'github-dashboard')].name" \
+            --output tsv | sort -r | head -1)
+          
+          SYNC_URL=$(az deployment group show \
+            --resource-group $(resourceGroupName) \
+            --name $DEPLOYMENT_NAME \
+            --query "properties.outputs.syncServiceUrl.value" \
+            --output tsv)
+          
+          DASHBOARD_URL=$(az deployment group show \
+            --resource-group $(resourceGroupName) \
+            --name $DEPLOYMENT_NAME \
+            --query "properties.outputs.dashboardUrl.value" \
+            --output tsv)
+          
+          echo "##vso[task.setvariable variable=syncServiceUrl]$SYNC_URL"
+          echo "##vso[task.setvariable variable=dashboardUrl]$DASHBOARD_URL"
+          
+          # Extract app names from URLs
+          SYNC_APP_NAME=$(echo $SYNC_URL | sed 's|https://||' | sed 's|\.azurewebsites\.net||')
+          DASHBOARD_APP_NAME=$(echo $DASHBOARD_URL | sed 's|https://||' | sed 's|\.azurewebsites\.net||')
+          
+          echo "##vso[task.setvariable variable=syncAppName]$SYNC_APP_NAME"
+          echo "##vso[task.setvariable variable=dashboardAppName]$DASHBOARD_APP_NAME"
+    
+    # Deploy Sync Service
+    - task: AzureWebApp@1
+      displayName: 'Deploy Sync Service'
+      inputs:
+        azureSubscription: '$(azureServiceConnection)'
+        appType: 'webAppLinux'
+        appName: '$(syncAppName)'
+        package: '$(Pipeline.Workspace)/github-dashboard/sync-service.zip'
+        runtimeStack: 'PYTHON|3.11'
+        startUpCommand: 'gunicorn --bind 0.0.0.0:8000 --chdir src app:app'
+    
+    # Deploy Dashboard
+    - task: AzureWebApp@1
+      displayName: 'Deploy Dashboard'
+      inputs:
+        azureSubscription: '$(azureServiceConnection)'
+        appType: 'webAppLinux'
+        appName: '$(dashboardAppName)'
+        package: '$(Pipeline.Workspace)/github-dashboard/dashboard.zip'
+        runtimeStack: 'PYTHON|3.11'
+        startUpCommand: 'gunicorn --bind 0.0.0.0:8001 --chdir src app:app'
+
+- stage: Validate
+  displayName: 'Post-Deployment Validation'
+  dependsOn: Deploy
+  condition: succeeded()
+  
+  jobs:
+  - job: ValidationTests
+    displayName: 'Run Validation Tests'
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    steps:
+    - download: current
+      artifact: github-dashboard
+    
+    - task: AzureCLI@2
+      displayName: 'Validate Deployment'
+      inputs:
+        azureSubscription: '$(azureServiceConnection)'
+        scriptType: 'pwsh'
+        scriptLocation: 'scriptPath'
+        scriptPath: '$(Pipeline.Workspace)/github-dashboard/deployment/scripts/validate-deployment.ps1'
+        arguments: '-Environment $(environment) -ResourceGroupName $(resourceGroupName) -Detailed'
+    
+    - task: Bash@3
+      displayName: 'Integration Tests'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Get application URLs
+          SYNC_URL=$(az deployment group show \
+            --resource-group $(resourceGroupName) \
+            --name $(az deployment group list --resource-group $(resourceGroupName) --query "[?starts_with(name, 'github-dashboard')].name" --output tsv | sort -r | head -1) \
+            --query "properties.outputs.syncServiceUrl.value" \
+            --output tsv)
+          
+          DASHBOARD_URL=$(az deployment group show \
+            --resource-group $(resourceGroupName) \
+            --name $(az deployment group list --resource-group $(resourceGroupName) --query "[?starts_with(name, 'github-dashboard')].name" --output tsv | sort -r | head -1) \
+            --query "properties.outputs.dashboardUrl.value" \
+            --output tsv)
+          
+          echo "Testing Sync Service at: $SYNC_URL"
+          echo "Testing Dashboard at: $DASHBOARD_URL"
+          
+          # Basic health checks
+          curl -f "$SYNC_URL/api/repositories" || exit 1
+          curl -f "$DASHBOARD_URL" || exit 1
+          
+          echo "✅ All integration tests passed!"
+
+# Cleanup job for failed deployments
+- stage: Cleanup
+  displayName: 'Cleanup on Failure'
+  dependsOn: 
+  - Deploy
+  - Validate
+  condition: failed()
+  
+  jobs:
+  - job: CleanupResources
+    displayName: 'Cleanup Failed Deployment'
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    steps:
+    - download: current
+      artifact: github-dashboard
+    
+    - task: AzureCLI@2
+      displayName: 'Cleanup Resources'
+      inputs:
+        azureSubscription: '$(azureServiceConnection)'
+        scriptType: 'pwsh'
+        scriptLocation: 'scriptPath'
+        scriptPath: '$(Pipeline.Workspace)/github-dashboard/deployment/scripts/cleanup.ps1'
+        arguments: '-Environment $(environment) -ResourceGroupName $(resourceGroupName) -Force -KeepResourceGroup'

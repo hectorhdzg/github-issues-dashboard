@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}GitHub Issues Dashboard{% endblock %}
+
+{% block content %}
+<!-- Global Data Type Toggle -->
+<div class="global-data-type-toggle">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-auto">
+                <div class="btn-group" role="group" aria-label="Data Type Toggle">
+                    <button type="button" class="btn btn-toggle-data-type btn-primary active" id="issues-toggle">
+                        <i class="fas fa-exclamation-circle"></i> Issues
+                    </button>
+                    <button type="button" class="btn btn-toggle-data-type btn-outline-primary" id="prs-toggle">
+                        <i class="fas fa-code-branch"></i> Pull Requests
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Global State Filter Toggle -->
+<div class="global-state-toggle">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-auto">
+                <div class="btn-group btn-group-sm" role="group" aria-label="State Filter Toggle">
+                    <button type="button" class="btn btn-state-filter btn-primary active" id="open-toggle" data-state="open">
+                        <i class="fas fa-exclamation-circle"></i> Open
+                    </button>
+                    <button type="button" class="btn btn-state-filter btn-outline-success" id="closed-toggle" data-state="closed">
+                        <i class="fas fa-check-circle"></i> Closed
+                    </button>
+                    <button type="button" class="btn btn-state-filter btn-outline-secondary" id="all-toggle" data-state="all">
+                        <i class="fas fa-list"></i> All
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="main-container">
+    <!-- Empty state shown by default to prevent flash -->
+    <div id="empty-state" class="empty-state">
+        <!-- Minimal empty content - nothing visible -->
+    </div>
+    
+    <!-- Intro page shown when no repo is selected and no URL parameters -->
+    <div id="intro-page" class="intro-page">
+        <div class="intro-content">
+            <div class="intro-header">
+                <i class="fas fa-bug intro-icon"></i>
+                <h1>Azure Monitor TelReach GitHub Dashboard</h1>
+                <p class="intro-subtitle">Track and manage GitHub issues across Azure Monitor scripting SDKs</p>
+            </div>
+            
+            <div class="intro-stats">
+                <h3>Repository Overview</h3>
+                <div class="stats-grid" id="dynamic-stats-grid">
+                    <!-- Dynamic overview cards will be inserted here by JavaScript -->
+                </div>
+            </div>
+            
+            <div class="intro-actions">
+                <div class="action-section">
+                    <h3>About This Project</h3>
+                    <p>This dashboard is built to help manage GitHub issues across Azure Monitor TelReach SDKs.</p>
+                    <a href="https://github.com/hectorhdzg/github-issues-dashboard" target="_blank" class="github-link">
+                        <i class="fab fa-github"></i>
+                        View on GitHub
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Repository Sections Container (dynamically populated by SPA) -->
+    <div id="repositories-container">
+        <!-- Repository sections will be dynamically generated here -->
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<!-- SPA JavaScript (integrated with original dashboard.js) -->
+<script src="{{ url_for('static', filename='js/spa.js') }}?v={{ range(1000, 9999) | random }}"></script>
+{% endblock %}
