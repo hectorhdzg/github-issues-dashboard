@@ -5,6 +5,7 @@
       "display_name": "Azure SDK for JavaScript",
       "main_category": "client",
       "classification": "javascript",
+      "language_group": "JavaScript",
       "priority": 1,
       "is_active": true
     },
@@ -13,6 +14,7 @@
       "display_name": "Azure SDK for Python",
       "main_category": "client",
       "classification": "python",
+      "language_group": "Python",
       "priority": 1,
       "is_active": true
     },
@@ -21,6 +23,7 @@
       "display_name": "Azure CLI",
       "main_category": "tools",
       "classification": "python",
+      "language_group": "Python",
       "priority": 2,
       "is_active": true
     }

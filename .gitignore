@@ -1,1 +1,51 @@
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.so
+*.egg-info/
+*.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments and local config
+.venv/
+.env
+.env.*
+.envrc
+
+# Node.js dependencies and build output
 githubDashboard/node_modules/
+githubDashboard/.cache/
+githubDashboard/dist/
+githubDashboard/build/
+githubDashboard/.next/
+githubDashboard/src/__pycache__/
+
+# Local databases and runtime artifacts
+githubDashboard/data/
+githubDashboard/github_data.db
+githubSync/data/
+githubSync/instance/
+
+# Logs and temporary archives
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+

@@ -15,6 +15,23 @@ class DashboardSPA {
             cache: new Map()
         };
         
+        this.languageOverrides = new Map([
+            ['azure/azure-sdk-for-js', 'Node.js'],
+            ['microsoft/applicationinsights-node.js', 'Node.js'],
+            ['microsoft/applicationinsights-node.js-native-metrics', 'Node.js'],
+            ['microsoft/node-diagnostic-channel', 'Node.js'],
+            ['open-telemetry/opentelemetry-js', 'Node.js'],
+            ['open-telemetry/opentelemetry-js-contrib', 'Node.js'],
+            ['microsoft/applicationinsights-js', 'Web/Browser'],
+            ['microsoft/applicationinsights-react-js', 'Web/Browser'],
+            ['microsoft/applicationinsights-react-native', 'Web/Browser'],
+            ['microsoft/applicationinsights-angularplugin-js', 'Web/Browser'],
+            ['microsoft/dynamicproto-js', 'Web/Browser']
+        ].map(([name, value]) => [name.toLowerCase(), value]));
+
+        this.nodeLanguageKeywords = ['node', 'native-metrics', 'diagnostic-channel'];
+        this.browserLanguageKeywords = ['browser', 'react', 'react-native', 'angular', 'web', 'frontend', 'front-end', 'ui', 'spa'];
+
         this.isInitializing = false; // Flag to prevent URL updates during initialization
         
         this.init();
@@ -405,28 +422,11 @@ class DashboardSPA {
     }
     
     buildNavbarFromRepositories(repositories) {
-        // Group repositories by main category for navbar
-        const categoriesMap = new Map();
-        
-        repositories.forEach(repo => {
-            const category = repo.main_category;
-            if (!categoriesMap.has(category)) {
-                categoriesMap.set(category, {
-                    repositories: [],
-                    count: 0
-                });
-            }
-            
-            categoriesMap.get(category).repositories.push({
-                id: repo.repo.replace(/[^a-zA-Z0-9]/g, '-'),
-                name: repo.repo,
-                display_name: repo.display_name,
-                count: 0 // Will be updated when content is loaded
-            });
-        });
-        
-        // Build navbar dynamically
-        this.buildDynamicNavbar(categoriesMap);
+        const languagesMap = this.createLanguageGrouping(
+            repositories,
+            this.state?.dataType || 'issues'
+        );
+        this.buildDynamicNavbar(languagesMap);
     }
     
     updateContentFromData(contentData) {
@@ -667,19 +667,11 @@ class DashboardSPA {
         this.updateIntroStats();
         
         // Rebuild the dynamic navbar to update dropdown counts
-        const categoriesMap = new Map();
-        if (this.state.repositories) {
-            this.state.repositories.forEach(repo => {
-                const category = repo.main_category || 'other';
-                if (!categoriesMap.has(category)) {
-                    categoriesMap.set(category, { count: 0, repositories: [] });
-                }
-                const categoryData = categoriesMap.get(category);
-                categoryData.count += repo.count || 0;
-                categoryData.repositories.push(repo);
-            });
-        }
-        this.buildDynamicNavbar(categoriesMap);
+        const languagesMap = this.createLanguageGrouping(
+            this.state.repositories,
+            this.state?.dataType || 'issues'
+        );
+        this.buildDynamicNavbar(languagesMap);
         
         // Don't automatically show repository sections - only show the table we just created
         // this.updateRepositorySections(); // Removed this line
@@ -807,67 +799,85 @@ class DashboardSPA {
     }
     
     updateIntroStats() {
-        // Calculate counts by category from repository data
-        const categoryCounts = new Map();
-        let totalCount = 0;
-        
-        if (this.state.repositories) {
-            this.state.repositories.forEach(repo => {
-                const count = repo.count || 0;
-                const category = repo.main_category || 'other';
-                
-                totalCount += count;
-                categoryCounts.set(category, (categoryCounts.get(category) || 0) + count);
-            });
-        }
-        
-        // Category display configuration
-        const categoryConfig = {
-            'nodejs': { icon: 'fab fa-node-js', label: 'Node.js', color: 'text-success' },
-            'python': { icon: 'fab fa-python', label: 'Python', color: 'text-info' },
-            'dotnet': { icon: 'fab fa-microsoft', label: '.NET', color: 'text-primary' },
-            'browser': { icon: 'fab fa-js-square', label: 'Browser JS', color: 'text-warning' },
-            'javascript': { icon: 'fab fa-js-square', label: 'Browser JS', color: 'text-warning' },
-            'java': { icon: 'fab fa-java', label: 'Java', color: 'text-danger' },
-            'react': { icon: 'fab fa-react', label: 'React', color: 'text-info' },
-            'other': { icon: 'fas fa-code', label: 'Other', color: 'text-secondary' }
-        };
-        
-        // Get the stats grid container
         const statsGrid = document.getElementById('dynamic-stats-grid');
-        if (!statsGrid) return;
-        
-        // Clear existing content
-        statsGrid.innerHTML = '';
-        
-        // Create stat items for each category that has data
-        const sortedCategories = Array.from(categoryCounts.entries())
-            .sort((a, b) => b[1] - a[1]); // Sort by count descending
-        
-        sortedCategories.forEach(([category, count]) => {
-            const config = categoryConfig[category] || categoryConfig['other'];
-            const dataType = this.state.dataType === 'issues' ? 'Issues' : 'Pull Requests';
-            
-            const statItem = document.createElement('div');
-            statItem.className = 'stat-item';
-            statItem.innerHTML = `
-                <span class="stat-number ${config.color}">${count}</span>
-                <span class="stat-label">${config.label} ${dataType}</span>
-            `;
-            
-            statsGrid.appendChild(statItem);
+        if (!statsGrid) {
+            return;
+        }
+
+        const repositories = Array.isArray(this.state.repositories) ? this.state.repositories : [];
+        const languagesMap = this.createLanguageGrouping(repositories, this.state?.dataType || 'issues');
+        const categoryCounts = new Map();
+
+        let totalCount = 0;
+        languagesMap.forEach((languageData, languageKey) => {
+            const count = languageData.displayCount ?? languageData.totalCount ?? 0;
+            if (count > 0) {
+                categoryCounts.set(languageKey, count);
+                totalCount += count;
+            }
         });
-        
-        // Always add total at the end
-        const totalItem = document.createElement('div');
-        totalItem.className = 'stat-item';
-        const dataType = this.state.dataType === 'issues' ? 'Issues' : 'Pull Requests';
-        totalItem.innerHTML = `
-            <span class="stat-number text-dark"><strong>${totalCount}</strong></span>
-            <span class="stat-label"><strong>Total ${dataType}</strong></span>
+
+        statsGrid.innerHTML = '';
+        const dataTypeLabel = this.state.dataType === 'issues' ? 'Issues' : 'Pull Requests';
+
+        if (totalCount === 0) {
+            statsGrid.innerHTML = `<div class="stat-empty">No ${dataTypeLabel.toLowerCase()} are currently tracked.</div>`;
+            return;
+        }
+
+        const groupDescriptor = categoryCounts.size === 1 ? 'language group' : 'language groups';
+
+        const categoryConfig = {
+            'Node.js': { icon: 'fab fa-node-js', label: 'Node.js', accent: '#1a7f37', accentSoft: '#1a7f371a' },
+            'Web/Browser': { icon: 'fas fa-globe', label: 'Web/Browser', accent: '#d29922', accentSoft: '#d299221a' },
+            'JavaScript': { icon: 'fab fa-js', label: 'JavaScript', accent: '#bf8700', accentSoft: '#bf87001a' },
+            'DotNet': { icon: 'fab fa-microsoft', label: '.NET', accent: '#5a32a3', accentSoft: '#5a32a31a' },
+            'Python': { icon: 'fab fa-python', label: 'Python', accent: '#1b7c83', accentSoft: '#1b7c831a' },
+            'Java': { icon: 'fab fa-java', label: 'Java', accent: '#cf222e', accentSoft: '#cf222e1a' },
+            'Other': { icon: 'fas fa-code', label: 'Other', accent: '#6e7781', accentSoft: '#6e77811a' }
+        };
+
+        const totalCard = document.createElement('article');
+        totalCard.className = 'stat-card stat-card-emphasis';
+        totalCard.style.setProperty('--stat-accent', '#0969da');
+        totalCard.style.setProperty('--stat-accent-soft', '#0969da1a');
+        totalCard.innerHTML = `
+            <div class="stat-icon"><i class="fas fa-chart-pie" aria-hidden="true"></i></div>
+            <div class="stat-body">
+                <div class="stat-title">Overview</div>
+                <div class="stat-metric">${totalCount.toLocaleString()}</div>
+                <div class="stat-caption">
+                        <span class="stat-label">Total ${dataTypeLabel}</span>
+                        <span class="stat-share">${categoryCounts.size} ${groupDescriptor}</span>
+                </div>
+            </div>
         `;
-        
-        statsGrid.appendChild(totalItem);
+        statsGrid.appendChild(totalCard);
+
+        const sortedCategories = Array.from(categoryCounts.entries()).sort((a, b) => b[1] - a[1]);
+        sortedCategories.forEach(([category, count]) => {
+            const config = categoryConfig[category] || categoryConfig.Other;
+            const share = totalCount > 0 ? Math.round((count / totalCount) * 100) : 0;
+            const shareText = share > 0 ? `<span class="stat-share">${share}% of total</span>` : '';
+
+            const statCard = document.createElement('article');
+            statCard.className = 'stat-card';
+            statCard.style.setProperty('--stat-accent', config.accent);
+            statCard.style.setProperty('--stat-accent-soft', config.accentSoft);
+            statCard.innerHTML = `
+                <div class="stat-icon"><i class="${config.icon}" aria-hidden="true"></i></div>
+                <div class="stat-body">
+                    <div class="stat-title">${config.label}</div>
+                    <div class="stat-metric">${count.toLocaleString()}</div>
+                    <div class="stat-caption">
+                        <span class="stat-label">${dataTypeLabel}</span>
+                        ${shareText}
+                    </div>
+                </div>
+            `;
+
+            statsGrid.appendChild(statCard);
+        });
     }
     
     updateRepositorySections() {
@@ -1346,25 +1356,12 @@ class DashboardSPA {
         
         console.log('updateNavigation: Building navbar from', this.state.repositories.length, 'repositories');
         
-        // Group repositories by category and calculate what categories we actually have
-        const categoriesMap = new Map();
-        
-        this.state.repositories.forEach(repo => {
-            const category = repo.main_category || repo.sdk_type;
-            if (!categoriesMap.has(category)) {
-                categoriesMap.set(category, {
-                    repositories: [],
-                    count: 0
-                });
-            }
-            categoriesMap.get(category).repositories.push(repo);
-            categoriesMap.get(category).count += repo.count;
-        });
-        
-        console.log('Categories found:', Array.from(categoriesMap.keys()));
-        
-        // Build navbar dynamically
-        this.buildDynamicNavbar(categoriesMap);
+        const languagesMap = this.createLanguageGrouping(
+            this.state.repositories,
+            this.state?.dataType || 'issues'
+        );
+        console.log('Languages found:', Array.from(languagesMap.keys()));
+        this.buildDynamicNavbar(languagesMap);
     }
     
     updateNavbarCount(elementId, count) {
@@ -1372,69 +1369,278 @@ class DashboardSPA {
         console.log(`Legacy updateNavbarCount called for ${elementId} with count ${count}`);
     }
     
-    buildDynamicNavbar(categoriesMap) {
-        // Find the navbar nav element where we'll insert the dynamic dropdowns
+    buildDynamicNavbar(languagesMap) {
         const navbarNav = document.querySelector('#navbarNav .navbar-nav.mr-auto');
         if (!navbarNav) {
             console.error('Could not find navbar navigation element');
             return;
         }
-        
-        // Clear existing dynamic dropdowns (keep only the brand)
+
         navbarNav.innerHTML = '';
-        
-        // Category display config - use actual main_category values from API
-        const categoryConfig = {
-            'Azure SDK': { icon: 'fas fa-cloud', label: 'Azure SDK' },
-            'Core Service': { icon: 'fas fa-server', label: 'Core Service' },
-            'Monitoring': { icon: 'fas fa-chart-line', label: 'Monitoring' },
-            'Tools': { icon: 'fas fa-tools', label: 'Tools' },
-            'Documentation': { icon: 'fas fa-book', label: 'Documentation' },
-            'other': { icon: 'fas fa-code', label: 'Other' }
+
+        if (!languagesMap || languagesMap.size === 0) {
+            navbarNav.innerHTML = '<li class="nav-item"><span class="nav-link text-muted">No repositories</span></li>';
+            return;
+        }
+
+        const languageIcons = {
+            'DotNet': 'fab fa-microsoft',
+            'Node.js': 'fab fa-node-js',
+            'Web/Browser': 'fas fa-globe',
+            'JavaScript': 'fab fa-js',
+            'Python': 'fab fa-python',
+            'Java': 'fab fa-java',
+            'Other': 'fas fa-code'
         };
-        
-        // Build dropdown for each category that has repositories
-        Array.from(categoriesMap.entries()).forEach(([category, data]) => {
-            const config = categoryConfig[category] || categoryConfig['other'];
-            const categoryId = category.replace(/[^a-zA-Z0-9]/g, '-'); // Make CSS-safe ID
-            const dropdownId = `${categoryId}-dropdown-menu`;
-            
+
+        const languageOrder = ['DotNet', 'Node.js', 'Web/Browser', 'JavaScript', 'Python', 'Java', 'Other'];
+
+        const sortedLanguages = Array.from(languagesMap.keys()).sort((a, b) => {
+            const indexA = languageOrder.indexOf(a);
+            const indexB = languageOrder.indexOf(b);
+            if (indexA === -1 && indexB === -1) {
+                return (a || '').localeCompare(b || '');
+            }
+            if (indexA === -1) return 1;
+            if (indexB === -1) return -1;
+            return indexA - indexB;
+        });
+
+        sortedLanguages.forEach(languageKey => {
+            const languageData = languagesMap.get(languageKey);
+            const languageId = (languageKey || 'language').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+            const iconClass = languageIcons[languageKey] || languageIcons.Other;
+            const label = this.getLanguageLabel(languageKey);
+            const badgeCount = languageData.displayCount ?? languageData.totalCount ?? 0;
+
             const dropdownHTML = `
                 <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" id="${categoryId}Dropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                        <i class="${config.icon} language-icon"></i> ${config.label}
-                        <span class="badge badge-count" id="navbar-${categoryId}-count">${data.count}</span>
+                    <a class="nav-link dropdown-toggle" href="#" id="${languageId}Dropdown" role="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                        <i class="${iconClass} language-icon"></i> ${label}
+                        <span class="badge badge-count" id="navbar-${languageId}-count">${badgeCount}</span>
                     </a>
-                    <div class="dropdown-menu" aria-labelledby="${categoryId}Dropdown" id="${dropdownId}">
-                        ${this.buildDropdownContent(data.repositories)}
+                    <div class="dropdown-menu" aria-labelledby="${languageId}Dropdown" id="${languageId}-dropdown-menu">
+                        ${this.buildDropdownContent(languageData)}
                     </div>
                 </li>
             `;
-            
+
             navbarNav.insertAdjacentHTML('beforeend', dropdownHTML);
         });
-        
-        console.log('Dynamic navbar built with', categoriesMap.size, 'categories');
-        
-        // Re-initialize Bootstrap dropdowns
+
+        console.log('Dynamic navbar built with', languagesMap.size, 'language groups');
+
         this.initializeBootstrapDropdowns();
     }
-    
-    buildDropdownContent(repositories) {
-        if (!repositories || repositories.length === 0) {
+
+    buildDropdownContent(languageData) {
+        if (!languageData || !languageData.types || languageData.types.size === 0) {
             return '<span class="dropdown-item-text text-muted">No repositories</span>';
         }
-        
-        return repositories.map(repo => {
-            const isActive = repo.name === this.state.selectedRepo ? 'active' : '';
-            const countBadge = repo.count > 0 ? 
-                `<span class="badge badge-light ml-2">${repo.count}</span>` : 
-                `<span class="badge badge-secondary ml-2">0</span>`;
-            
-            return `<a class="dropdown-item ${isActive}" href="#" onclick="dashboardSPA.selectRepository('${repo.name}'); return false;">
-                ${repo.display_name} ${countBadge}
-            </a>`;
+
+        const typeEntries = Array.from(languageData.types.entries()).sort((a, b) => {
+            return this.getTypeLabel(a[0]).localeCompare(this.getTypeLabel(b[0]));
+        });
+
+        const sections = typeEntries.map(([typeKey, typeData], index) => {
+            const typeLabel = this.getTypeLabel(typeKey);
+            const sectionCount = typeData.displayCount ?? typeData.count ?? 0;
+            const header = `<h6 class="dropdown-header">${typeLabel}<span class="badge badge-pill badge-light ml-2">${sectionCount}</span></h6>`;
+
+            const repoItems = typeData.repositories
+                .slice()
+                .sort((a, b) => a.display_name.localeCompare(b.display_name))
+                .map(repo => {
+                    const isActive = repo.name === this.state.selectedRepo ? 'active' : '';
+                    const repoCount = typeof repo.count === 'number' ? repo.count : 0;
+                    const badgeClass = repoCount > 0 ? 'badge-light' : 'badge-secondary';
+                    return `<a class="dropdown-item ${isActive}" href="#" onclick="dashboardSPA.selectRepository('${repo.name}'); return false;">
+                        ${this.escapeHtml(repo.display_name)}
+                        <span class="badge ${badgeClass} ml-2">${repoCount}</span>
+                    </a>`;
+                })
+                .join('');
+
+            const divider = index < typeEntries.length - 1 ? '<div class="dropdown-divider"></div>' : '';
+            return `${header}${repoItems}${divider}`;
         }).join('');
+
+        return sections || '<span class="dropdown-item-text text-muted">No repositories</span>';
+    }
+
+    getLanguageLabel(languageKey) {
+        const labels = {
+            'DotNet': '.NET',
+            'Node.js': 'Node.js',
+            'Web/Browser': 'Web/Browser',
+            'JavaScript': 'JavaScript',
+            'Python': 'Python',
+            'Java': 'Java',
+            'Other': 'Other'
+        };
+        return labels[languageKey] || languageKey || 'Other';
+    }
+
+    getTypeLabel(typeKey) {
+        const labels = {
+            'Azure SDK': 'Azure SDK',
+            'Application Insights': 'Microsoft',
+            'OpenTelemetry': 'OpenTelemetry',
+            'Core Service': 'Core Service',
+            'Monitoring': 'Monitoring',
+            'Tools': 'Tools',
+            'Documentation': 'Documentation',
+            'other': 'Other',
+            'Other': 'Other'
+        };
+        return labels[typeKey] || typeKey || 'Other';
+    }
+
+    normalizeRepositoryForGrouping(repo, dataType = 'issues') {
+        if (!repo) {
+            return null;
+        }
+
+        const repoName = repo.name || repo.repo;
+        if (!repoName) {
+            return null;
+        }
+
+        const displayName = repo.display_name || repo.displayName || repoName.split('/').pop();
+        const classification = repo.classification || repo.language || 'Other';
+        const languageGroup = repo.language_group || repo.languageGroup || repo.language_category || null;
+        const mainCategory = repo.main_category || repo.sdk_type || 'Other';
+        const issueCount = typeof repo.issue_count === 'number'
+            ? repo.issue_count
+            : typeof repo.issueCount === 'number'
+                ? repo.issueCount
+                : 0;
+        const prCount = typeof repo.pr_count === 'number'
+            ? repo.pr_count
+            : typeof repo.pull_request_count === 'number'
+                ? repo.pull_request_count
+                : 0;
+
+        let count;
+        if (typeof repo.count === 'number') {
+            count = repo.count;
+        } else if (dataType === 'prs') {
+            count = prCount;
+        } else {
+            count = issueCount;
+        }
+
+        return {
+            id: repoName.replace(/[^a-zA-Z0-9]/g, '-'),
+            name: repoName,
+            display_name: displayName,
+            classification,
+            language_group: languageGroup,
+            main_category: mainCategory,
+            issue_count: issueCount,
+            pr_count: prCount,
+            count
+        };
+    }
+
+    determineLanguageKey(repo) {
+        if (!repo) {
+            return 'Other';
+        }
+
+        const directLanguage = repo.language_group || repo.languageGroup || repo.language_category;
+        if (directLanguage) {
+            return directLanguage;
+        }
+
+        const repoName = (repo.name || repo.repo || '').toLowerCase();
+        if (repoName && this.languageOverrides.has(repoName)) {
+            return this.languageOverrides.get(repoName);
+        }
+
+        const baseClassification = (repo.classification || repo.language || 'Other').toString().trim();
+        const normalized = baseClassification.toLowerCase();
+
+        if (normalized === 'dotnet' || normalized === '.net') {
+            return 'DotNet';
+        }
+        if (normalized === 'python') {
+            return 'Python';
+        }
+        if (normalized === 'java') {
+            return 'Java';
+        }
+
+        if (normalized === 'javascript' || normalized === 'typescript') {
+            const display = (repo.display_name || repo.displayName || '').toLowerCase();
+            const category = (repo.main_category || repo.sdk_type || '').toLowerCase();
+            const combined = `${repoName} ${display} ${category}`;
+
+            if (this.nodeLanguageKeywords.some(keyword => combined.includes(keyword))) {
+                return 'Node.js';
+            }
+
+            if (this.browserLanguageKeywords.some(keyword => combined.includes(keyword))) {
+                return 'Web/Browser';
+            }
+
+            return 'JavaScript';
+        }
+
+        return repo.classification || repo.language || 'Other';
+    }
+
+    createLanguageGrouping(repositories, dataType = 'issues') {
+        const languagesMap = new Map();
+        if (!Array.isArray(repositories)) {
+            return languagesMap;
+        }
+
+        repositories.forEach(repoData => {
+            const normalized = this.normalizeRepositoryForGrouping(repoData, dataType);
+            if (!normalized) {
+                return;
+            }
+
+            const languageKey = this.determineLanguageKey(normalized) || 'Other';
+            const typeKey = normalized.main_category || 'Other';
+
+            if (!languagesMap.has(languageKey)) {
+                languagesMap.set(languageKey, {
+                    totalCount: 0,
+                    displayCount: 0,
+                    repositoryTotal: 0,
+                    types: new Map()
+                });
+            }
+
+            const languageGroup = languagesMap.get(languageKey);
+            languageGroup.totalCount += normalized.count;
+            languageGroup.repositoryTotal += 1;
+
+            if (!languageGroup.types.has(typeKey)) {
+                languageGroup.types.set(typeKey, {
+                    count: 0,
+                    displayCount: 0,
+                    repositoryTotal: 0,
+                    repositories: []
+                });
+            }
+
+            const typeGroup = languageGroup.types.get(typeKey);
+            typeGroup.count += normalized.count;
+            typeGroup.repositoryTotal += 1;
+            typeGroup.repositories.push(normalized);
+        });
+
+        languagesMap.forEach(languageGroup => {
+            languageGroup.displayCount = languageGroup.totalCount;
+            languageGroup.types.forEach(typeGroup => {
+                typeGroup.displayCount = typeGroup.count;
+            });
+        });
+
+        return languagesMap;
     }
     
     initializeBootstrapDropdowns() {

@@ -2,6 +2,22 @@
 
 let repositories = [];
 
+const PRIORITY_CONFIG = {
+    1: { label: 'High', className: 'priority-high', badgeClass: 'bg-danger' },
+    2: { label: 'Medium', className: 'priority-medium', badgeClass: 'bg-warning text-dark' },
+    3: { label: 'Low', className: 'priority-low', badgeClass: 'bg-success' }
+};
+
+const LANGUAGE_BADGE_CLASS = {
+    'DotNet': 'bg-primary',
+    'Node.js': 'bg-success',
+    'Web/Browser': 'bg-info text-dark',
+    'JavaScript': 'bg-warning text-dark',
+    'Python': 'bg-secondary',
+    'Java': 'bg-danger',
+    'Other': 'bg-dark'
+};
+
 document.addEventListener('DOMContentLoaded', function() {
     loadRepositories();
 });
@@ -41,23 +57,48 @@ function renderRepositories() {
         return;
     }
 
-    const repoCards = repositories.map(repo => {
-        const priorityClass = `priority-${repo.priority}`;
-        const statusIcon = repo.is_active ? 'check-circle-fill text-success' : 'x-circle-fill text-danger';
-        const status = repo.is_active ? 'active' : 'inactive';
-        
-        // Parse owner/name from repo field (format: "owner/name")
-        const [owner, name] = repo.repo.split('/');
-        
+    const sortedRepos = repositories
+        .slice()
+        .sort((a, b) => {
+            const priorityA = Number(a.priority) || 99;
+            const priorityB = Number(b.priority) || 99;
+            if (priorityA !== priorityB) {
+                return priorityA - priorityB;
+            }
+            return (a.repo || '').localeCompare(b.repo || '');
+        });
+
+    const repoCards = sortedRepos.map(repo => {
+        const isActive = repo.is_active === 1 || repo.is_active === true;
+        const statusIcon = isActive ? 'check-circle-fill text-success' : 'x-circle-fill text-danger';
+        const status = isActive ? 'Active' : 'Inactive';
+
+        const priorityValue = Number(repo.priority);
+        const priorityInfo = PRIORITY_CONFIG[priorityValue] || {
+            label: Number.isFinite(priorityValue) ? `Custom (${priorityValue})` : 'Unspecified',
+            className: 'priority-custom',
+            badgeClass: 'bg-secondary'
+        };
+
+        const languageKey = repo.language_group || repo.classification || 'Other';
+        const languageLabel = languageKey;
+        const languageBadge = LANGUAGE_BADGE_CLASS[languageKey] || LANGUAGE_BADGE_CLASS.Other;
+
+        const issueTotal = Number.isFinite(Number(repo.issue_count)) ? Number(repo.issue_count) : '-';
+        const prTotal = Number.isFinite(Number(repo.pr_count)) ? Number(repo.pr_count) : '-';
+
+        const updatedAt = formatDate(repo.updated_at);
+        const createdAt = formatDate(repo.created_at);
+
         return `
             <div class="col-md-6 col-lg-4 mb-4">
-                <div class="card repo-card h-100 ${priorityClass}">
+                <div class="card repo-card h-100 ${priorityInfo.className}">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start mb-3">
                             <h5 class="card-title mb-0">
                                 <i class="bi bi-github"></i> ${repo.repo}
                             </h5>
-                            <span class="badge status-badge ${status === 'active' ? 'bg-success' : 'bg-danger'}">
+                            <span class="badge status-badge ${isActive ? 'bg-success' : 'bg-danger'}">
                                 <i class="bi bi-${statusIcon}"></i> ${status}
                             </span>
                         </div>
@@ -69,9 +110,19 @@ function renderRepositories() {
                         
                         <div class="mb-3">
                             <small class="text-muted">Category: </small>
-                            <span class="badge bg-info">${repo.main_category}</span>
-                            <small class="text-muted ms-2">Priority: </small>
-                            <span class="badge bg-secondary">${repo.priority}</span>
+                            <span class="badge bg-info text-dark">${repo.main_category}</span>
+                        </div>
+
+                        <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+                            <span class="badge ${languageBadge}">
+                                <i class="bi bi-translate"></i> ${languageLabel}
+                            </span>
+                            <span class="badge ${priorityInfo.badgeClass}">
+                                <i class="bi bi-bar-chart"></i> Priority: ${priorityInfo.label}
+                            </span>
+                            <span class="badge bg-light text-muted border">
+                                Classification: ${repo.classification}
+                            </span>
                         </div>
                         
                         <div class="row text-center mb-3">
@@ -80,20 +131,31 @@ function renderRepositories() {
                                     <i class="bi bi-exclamation-circle"></i>
                                 </div>
                                 <small class="text-muted">Issues</small>
-                                <div class="fw-bold">${repo.issue_count || '-'}</div>
+                                <div class="fw-bold">${issueTotal}</div>
                             </div>
                             <div class="col-6">
                                 <div class="text-success">
                                     <i class="bi bi-git-pull-request"></i>
                                 </div>
                                 <small class="text-muted">PRs</small>
-                                <div class="fw-bold">${repo.pr_count || '-'}</div>
+                                <div class="fw-bold">${prTotal}</div>
                             </div>
+                        </div>
+
+                        <div class="small text-muted mb-3">
+                            <div>Created: ${createdAt}</div>
+                            <div>Last Updated: ${updatedAt}</div>
                         </div>
                         
                         <div class="d-flex gap-2">
-                            <button class="btn btn-outline-primary btn-sm flex-fill" onclick="syncRepository('${owner}', '${name}')">
-                                <i class="bi bi-arrow-clockwise"></i> Sync
+                            <button class="btn btn-outline-primary btn-sm flex-fill" onclick="syncRepository('${repo.repo}')">
+                                <i class="bi bi-arrow-clockwise"></i> Sync All
+                            </button>
+                            <button class="btn btn-outline-secondary btn-sm" onclick="syncRepositoryIssues('${repo.repo}')">
+                                <i class="bi bi-exclamation-circle"></i>
+                            </button>
+                            <button class="btn btn-outline-success btn-sm" onclick="syncRepositoryPullRequests('${repo.repo}')">
+                                <i class="bi bi-git-pull-request"></i>
                             </button>
                             <button class="btn btn-outline-danger btn-sm" onclick="removeRepository('${repo.repo}')">
                                 <i class="bi bi-trash"></i>
@@ -111,20 +173,34 @@ function renderRepositories() {
 async function addRepository() {
     const owner = document.getElementById('repoOwner').value.trim();
     const name = document.getElementById('repoName').value.trim();
-    const priority = document.getElementById('repoPriority').value;
+    const displayName = document.getElementById('repoDisplayName').value.trim();
+    const mainCategory = document.getElementById('repoCategory').value.trim();
+    const classification = document.getElementById('repoClassification').value;
+    const priorityValue = parseInt(document.getElementById('repoPriority').value, 10);
+    const isActive = document.getElementById('repoActive').checked;
 
-    if (!owner || !name) {
-        alert('Please enter both owner and repository name.');
+    if (!owner || !name || !mainCategory) {
+        alert('Please enter repository owner, name, and main category.');
         return;
     }
 
     try {
+        const repoIdentifier = `${owner}/${name}`;
+        const payload = {
+            repo: repoIdentifier,
+            display_name: displayName || name,
+            main_category: mainCategory,
+            classification: classification || 'Other',
+            priority: Number.isFinite(priorityValue) ? priorityValue : 3,
+            is_active: isActive
+        };
+
         const response = await fetch('/api/repositories', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ owner, name, priority })
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
@@ -137,7 +213,7 @@ async function addRepository() {
         document.getElementById('add-repo-form').reset();
         loadRepositories();
         
-        showSuccess(`Repository ${owner}/${name} added successfully!`);
+        showSuccess(`Repository ${repoIdentifier} added successfully!`);
     } catch (error) {
         console.error('Error adding repository:', error);
         showError('Failed to add repository. Please try again.');
@@ -166,16 +242,12 @@ async function removeRepository(repoPath) {
     }
 }
 
-async function syncRepository(owner, name) {
+async function syncRepository(repoPath) {
     try {
-        showInfo(`Starting sync for ${owner}/${name}...`);
-        
-        const response = await fetch('/api/sync/single', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ owner, name })
+        showInfo(`Starting full sync for ${repoPath}...`);
+
+        const response = await fetch(`/api/sync/repositories/${encodeURIComponent(repoPath)}`, {
+            method: 'POST'
         });
 
         if (!response.ok) {
@@ -183,13 +255,65 @@ async function syncRepository(owner, name) {
         }
 
         const result = await response.json();
-        showSuccess(`Sync completed for ${owner}/${name}! ${result.message || ''}`);
+        showSuccess(`Sync completed for ${repoPath}!`);
         
         // Refresh repository data
         setTimeout(loadRepositories, 1000);
     } catch (error) {
         console.error('Error syncing repository:', error);
-        showError(`Failed to sync ${owner}/${name}. Please try again.`);
+        showError(`Failed to sync ${repoPath}. Please try again.`);
+    }
+}
+
+async function syncRepositoryIssues(repoPath) {
+    await syncRepositoryByType(repoPath, 'issues');
+}
+
+async function syncRepositoryPullRequests(repoPath) {
+    await syncRepositoryByType(repoPath, 'prs');
+}
+
+async function syncRepositoryByType(repoPath, type) {
+    const endpoint = type === 'issues'
+        ? `/api/sync/repositories/${encodeURIComponent(repoPath)}/issues`
+        : `/api/sync/repositories/${encodeURIComponent(repoPath)}/prs`;
+
+    try {
+        showInfo(`Syncing ${type.toUpperCase()} for ${repoPath}...`);
+
+        const response = await fetch(endpoint, { method: 'POST' });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (result.success) {
+            showSuccess(`${type.toUpperCase()} sync completed for ${repoPath}.`);
+        } else {
+            showError(`Sync completed with issues for ${repoPath}: ${result.error || 'Unknown error'}`);
+        }
+
+        setTimeout(loadRepositories, 1000);
+    } catch (error) {
+        console.error(`Error syncing ${type} for repository:`, error);
+        showError(`Failed to sync ${type} for ${repoPath}. Please try again.`);
+    }
+}
+
+function formatDate(value) {
+    if (!value) {
+        return '—';
+    }
+
+    try {
+        const date = new Date(value.replace(' ', 'T'));
+        if (Number.isNaN(date.getTime())) {
+            return value;
+        }
+        return date.toLocaleString();
+    } catch (error) {
+        return value;
     }
 }
 

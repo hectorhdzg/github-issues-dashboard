@@ -15,6 +15,7 @@ from logging.handlers import RotatingFileHandler
 import os
 import time
 from datetime import datetime, timezone
+from email.utils import format_datetime
 from typing import Dict, List, Optional, Any
 from uuid import uuid4
 from flask import Flask, jsonify, request
@@ -86,24 +87,191 @@ CORS(app)  # Enable CORS for all routes
 
 class GitHubSyncService:
     """Service for synchronizing GitHub data"""
-    
+
     def __init__(self, database_path: str):
         self.database_path = database_path
         self.base_url = "https://api.github.com"
         self.github_token = os.environ.get('GITHUB_TOKEN', '')
-        self.headers = {}
+        self.headers: Dict[str, str] = {}
         if self.github_token:
             self.headers['Authorization'] = f'token {self.github_token}'
-        
+
+        # Heuristics for mapping repositories to language groupings used by the dashboard UI
+        self.language_overrides = {
+            'microsoft/applicationinsights-node.js': 'Node.js',
+            'microsoft/applicationinsights-node.js-native-metrics': 'Node.js',
+            'microsoft/node-diagnostic-channel': 'Node.js',
+            'open-telemetry/opentelemetry-js': 'Node.js',
+            'open-telemetry/opentelemetry-js-contrib': 'Node.js',
+            'microsoft/applicationinsights-js': 'Web/Browser',
+            'microsoft/applicationinsights-react-js': 'Web/Browser',
+            'microsoft/applicationinsights-react-native': 'Web/Browser',
+            'microsoft/applicationinsights-angularplugin-js': 'Web/Browser',
+            'microsoft/dynamicproto-js': 'Web/Browser'
+        }
+        self.language_overrides = {key.lower(): value for key, value in self.language_overrides.items()}
+        self.node_language_keywords = ('node', 'native-metrics', 'diagnostic-channel')
+        self.browser_language_keywords = ('browser', 'react', 'react-native', 'angular', 'web', 'frontend', 'front-end', 'ui', 'spa')
+
         # Initialize database
         self._init_database()
-        
+
         # Initialize automatic sync scheduler
         self.scheduler = BackgroundScheduler()
         self.auto_sync_enabled = True
         self._setup_automatic_sync()
-        
+
         logger.info(f"GitHubSyncService initialized with database: {database_path}")
+
+    def _get_last_sync_timestamp(self, repository: str, sync_type: str) -> Optional[str]:
+        """Return the last recorded sync timestamp for the repository/type in ISO format."""
+        try:
+            conn = sqlite3.connect(self.database_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT last_sync FROM sync_metadata WHERE repository = ? AND sync_type = ? ORDER BY id DESC LIMIT 1",
+                (repository, sync_type)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row and row['last_sync']:
+                return row['last_sync']
+        except Exception as exc:
+            logger.warning(f"Unable to read last sync timestamp for {repository} ({sync_type}): {exc}")
+        return None
+
+    def _update_sync_metadata(
+        self,
+        repository: str,
+        sync_type: str,
+        status: str,
+        items_synced: int = 0,
+        error_message: Optional[str] = None,
+        last_synced_at: Optional[str] = None
+    ) -> None:
+        """Upsert sync metadata so future runs can request only new data."""
+        try:
+            conn = sqlite3.connect(self.database_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT id, last_sync FROM sync_metadata WHERE repository = ? AND sync_type = ?",
+                (repository, sync_type)
+            )
+            row = cursor.fetchone()
+
+            new_last_sync = last_synced_at
+            if not new_last_sync:
+                # Preserve existing timestamp if we do not have a newer value yet.
+                new_last_sync = row['last_sync'] if row and row['last_sync'] else None
+
+            if row:
+                cursor.execute(
+                    """
+                    UPDATE sync_metadata
+                    SET last_sync = ?, status = ?, items_synced = ?, error_message = ?
+                    WHERE id = ?
+                    """,
+                    (new_last_sync, status, items_synced, error_message, row['id'])
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO sync_metadata (repository, sync_type, last_sync, status, items_synced, error_message)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (repository, sync_type, new_last_sync, status, items_synced, error_message)
+                )
+
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            logger.warning(f"Unable to update sync metadata for {repository} ({sync_type}): {exc}")
+
+    def _build_conditional_headers(self, last_sync_iso: Optional[str]) -> Dict[str, str]:
+        """Clone default headers and add If-Modified-Since when we have historical data."""
+        headers = dict(self.headers) if self.headers else {}
+        if last_sync_iso:
+            try:
+                normalized = last_sync_iso.replace('Z', '+00:00') if last_sync_iso.endswith('Z') else last_sync_iso
+                dt_value = datetime.fromisoformat(normalized)
+                if dt_value.tzinfo is None:
+                    dt_value = dt_value.replace(tzinfo=timezone.utc)
+                headers['If-Modified-Since'] = format_datetime(dt_value.astimezone(timezone.utc), usegmt=True)
+            except Exception as exc:
+                logger.warning(f"Failed to format If-Modified-Since header from {last_sync_iso}: {exc}")
+        return headers
+
+    @staticmethod
+    def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+        """Convert an ISO 8601 string into a timezone-aware datetime."""
+        if not value:
+            return None
+        normalized = value.replace('Z', '+00:00') if value.endswith('Z') else value
+        try:
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except ValueError:
+            logger.debug(f"Unable to parse timestamp value {value}")
+            return None
+
+    def _determine_language_group(
+        self,
+        repo_name: Optional[str],
+        display_name: Optional[str],
+        classification: Optional[str],
+        main_category: Optional[str]
+    ) -> str:
+        """Infer the language grouping used by the dashboard navigation."""
+        repo_key = (repo_name or '').lower()
+        if repo_key in self.language_overrides:
+            return self.language_overrides[repo_key]
+
+        normalized_classification = (classification or '').strip().lower()
+        if normalized_classification in ('.net', 'dotnet', 'c#', 'csharp', 'c-sharp'):
+            return 'DotNet'
+        if normalized_classification == 'python':
+            return 'Python'
+        if normalized_classification == 'java':
+            return 'Java'
+
+        if normalized_classification in ('javascript', 'typescript', 'node', 'node.js', 'nodejs'):
+            combined = ' '.join(filter(None, (
+                repo_name or '',
+                display_name or '',
+                main_category or '',
+                classification or ''
+            ))).lower()
+            if any(keyword in combined for keyword in self.node_language_keywords):
+                return 'Node.js'
+            if any(keyword in combined for keyword in self.browser_language_keywords):
+                return 'Web/Browser'
+            return 'JavaScript'
+
+        if normalized_classification:
+            return classification if classification else 'Other'
+
+        return 'Other'
+
+    def _refresh_repository_language_groups(self, cursor: sqlite3.Cursor) -> None:
+        """Ensure repositories.language_group is populated and up to date."""
+        cursor.execute("PRAGMA table_info(repositories)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if 'language_group' not in columns:
+            return
+
+        cursor.execute("SELECT repo, display_name, main_category, classification, language_group FROM repositories")
+        for repo, display_name, main_category, classification, current_language in cursor.fetchall():
+            inferred_language = self._determine_language_group(repo, display_name, classification, main_category)
+            if inferred_language != (current_language or 'Other'):
+                cursor.execute(
+                    "UPDATE repositories SET language_group = ?, updated_at = datetime('now') WHERE repo = ?",
+                    (inferred_language, repo)
+                )
     
     def _init_database(self):
         """Initialize database schema"""
@@ -117,6 +285,7 @@ class GitHubSyncService:
                 display_name TEXT NOT NULL,
                 main_category TEXT NOT NULL,
                 classification TEXT NOT NULL,
+                language_group TEXT DEFAULT 'Other',
                 priority INTEGER NOT NULL,
                 is_active BOOLEAN DEFAULT 1,
                 filters TEXT DEFAULT '{}',
@@ -130,6 +299,12 @@ class GitHubSyncService:
             cursor.execute("ALTER TABLE repositories ADD COLUMN filters TEXT DEFAULT '{}'")
         except sqlite3.OperationalError:
             # Column already exists
+            pass
+
+        # Add language_group column for existing databases
+        try:
+            cursor.execute("ALTER TABLE repositories ADD COLUMN language_group TEXT DEFAULT 'Other'")
+        except sqlite3.OperationalError:
             pass
         
         # Add sample repositories if table is empty
@@ -188,6 +363,9 @@ class GitHubSyncService:
                 ''', repo_data)
             
             logger.info(f"Added {len(sample_repos)} sample repositories with filter configurations to database")
+
+        # Ensure language group classifications are populated for all repositories
+        self._refresh_repository_language_groups(cursor)
         
         # Create issues table
         cursor.execute('''
@@ -556,6 +734,7 @@ class GitHubSyncService:
                 r.display_name, 
                 r.main_category, 
                 r.classification, 
+                r.language_group,
                 r.priority, 
                 r.is_active, 
                 r.created_at, 
@@ -577,7 +756,7 @@ class GitHubSyncService:
             ORDER BY r.priority, r.repo
         ''')
         
-        columns = ['repo', 'display_name', 'main_category', 'classification', 'priority', 'is_active', 'created_at', 'updated_at', 'issue_count', 'pr_count']
+        columns = ['repo', 'display_name', 'main_category', 'classification', 'language_group', 'priority', 'is_active', 'created_at', 'updated_at', 'issue_count', 'pr_count']
         repos = [dict(zip(columns, row)) for row in cursor.fetchall()]
         
         conn.close()
@@ -595,12 +774,14 @@ class GitHubSyncService:
                 conn.close()
                 return {"success": False, "error": "Repository already exists"}
             
+            language_group = self._determine_language_group(repo, display_name, classification, main_category)
+
             # Insert new repository
             cursor.execute('''
                 INSERT INTO repositories 
-                (repo, display_name, main_category, classification, priority, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-            ''', (repo, display_name, main_category, classification, priority, is_active))
+                (repo, display_name, main_category, classification, language_group, priority, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            ''', (repo, display_name, main_category, classification, language_group, priority, is_active))
             
             conn.commit()
             conn.close()
@@ -674,6 +855,18 @@ class GitHubSyncService:
             
             query = f"UPDATE repositories SET {', '.join(updates)} WHERE repo = ?"
             cursor.execute(query, values)
+
+            # Recompute language group using the latest repository attributes
+            cursor.execute("SELECT display_name, main_category, classification, language_group FROM repositories WHERE repo = ?", (repo,))
+            row = cursor.fetchone()
+            if row:
+                inferred_language = self._determine_language_group(repo, row[0], row[2], row[1])
+                current_language = row[3] or 'Other'
+                if inferred_language != current_language:
+                    cursor.execute(
+                        "UPDATE repositories SET language_group = ?, updated_at = datetime('now') WHERE repo = ?",
+                        (inferred_language, repo)
+                    )
             
             conn.commit()
             conn.close()
@@ -690,75 +883,113 @@ class GitHubSyncService:
         if not requests:
             logger.error("requests module not available - cannot sync issues")
             return {"success": False, "error": "requests module not available"}
-        
-        # Generate session ID if not provided
+
         if sync_session_id is None:
             sync_session_id = str(uuid4())
-        
+
         start_time = time.time()
-        
+
         try:
             logger.info(f"Syncing issues for repository: {repo_name}")
-            
-            # Get repository-specific filters
+
             repo_filters = self.get_repository_filters(repo_name)
             logger.info(f"Using filters for {repo_name}: {repo_filters}")
-            
+
+            last_sync_iso = self._get_last_sync_timestamp(repo_name, 'issues')
+            if last_sync_iso:
+                logger.info(f"Last successful issues sync for {repo_name}: {last_sync_iso}")
+            headers = self._build_conditional_headers(last_sync_iso)
+
             url = f"{self.base_url}/repos/{repo_name}/issues"
-            
-            # Build API parameters from filters
+
             params = self.build_github_api_params(repo_filters, 'issues')
             params.update({
                 'per_page': 100,
                 'sort': params.get('sort', 'updated'),
                 'direction': params.get('direction', 'desc')
             })
-            
+            if last_sync_iso:
+                params['since'] = last_sync_iso
+
             logger.info(f"GitHub API request params: {params}")
-            
-            response = requests.get(url, headers=self.headers, params=params, timeout=30)
+
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+
+            if response.status_code == 304:
+                logger.info(f"No new issues for {repo_name} since {last_sync_iso}")
+                duration_seconds = int(time.time() - start_time)
+                self._update_sync_metadata(
+                    repository=repo_name,
+                    sync_type='issues',
+                    status='not_modified',
+                    items_synced=0,
+                    last_synced_at=last_sync_iso
+                )
+                self.record_sync_history(
+                    sync_session_id=sync_session_id,
+                    repository=repo_name,
+                    sync_type='issues',
+                    issues_new=0,
+                    issues_updated=0,
+                    issues_total=0,
+                    duration_seconds=duration_seconds,
+                    status='success'
+                )
+                return {
+                    "success": True,
+                    "repository": repo_name,
+                    "issues_synced": 0,
+                    "issues_new": 0,
+                    "issues_updated": 0,
+                    "total_items": 0,
+                    "count": 0
+                }
+
             response.raise_for_status()
-            
+
             issues_data = response.json()
-            
-            # Filter out pull requests (GitHub API includes PRs in issues endpoint)
+
+            latest_seen_dt = self._parse_iso_datetime(last_sync_iso)
+            latest_seen_iso = last_sync_iso
+            for raw_item in issues_data:
+                updated_iso = raw_item.get('updated_at')
+                updated_dt = self._parse_iso_datetime(updated_iso)
+                if updated_dt and (latest_seen_dt is None or updated_dt > latest_seen_dt):
+                    latest_seen_dt = updated_dt
+                    latest_seen_iso = updated_iso
+
             issues = [item for item in issues_data if 'pull_request' not in item]
-            
-            # Apply exclude filters
+
             filtered_issues = []
             for issue in issues:
                 if not self.should_exclude_item(issue, repo_filters, 'issues'):
                     filtered_issues.append(issue)
                 else:
                     logger.debug(f"Excluding issue #{issue['number']} due to filter rules")
-            
+
             logger.info(f"Fetched {len(issues)} issues, {len(filtered_issues)} after filtering")
-            
-            # Store issues in database using existing schema
+
             conn = sqlite3.connect(self.database_path)
             cursor = conn.cursor()
-            
+
             issues_new = 0
             issues_updated = 0
             for issue in filtered_issues:
                 try:
-                    # Check if this issue already exists
                     cursor.execute('''
                         SELECT updated_at FROM issues 
                         WHERE repo = ? AND number = ?
                     ''', (repo_name, issue['number']))
-                    
+
                     existing = cursor.fetchone()
                     is_new = existing is None
                     is_updated = False
-                    
+
                     if not is_new:
-                        # Check if the issue was actually updated
                         existing_updated_at = existing[0]
                         current_updated_at = issue['updated_at']
                         is_updated = existing_updated_at != current_updated_at
-                    
-                    # Insert or replace the issue
+
                     cursor.execute('''
                         INSERT OR REPLACE INTO issues (
                             repo, number, title, html_url, assignee_login, created_at, updated_at, 
@@ -780,23 +1011,29 @@ class GitHubSyncService:
                         issue['user']['avatar_url'],
                         str(issue.get('comments', 0))
                     ))
-                    
-                    # Track the operation
+
                     if is_new:
                         issues_new += 1
                     elif is_updated:
                         issues_updated += 1
-                        
-                except Exception as e:
-                    logger.error(f"Error processing issue {issue['number']}: {e}")
-            
-            # Update sync metadata using existing schema - REMOVED broken sync_metadata inserts
-            # Using sync_history table instead for tracking sync status
-            
+
+                except Exception as exc:
+                    logger.error(f"Error processing issue {issue['number']}: {exc}")
+
             conn.commit()
             conn.close()
-            
-            # Record sync history
+
+            if latest_seen_iso is None:
+                latest_seen_iso = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+
+            self._update_sync_metadata(
+                repository=repo_name,
+                sync_type='issues',
+                status='success',
+                items_synced=issues_new + issues_updated,
+                last_synced_at=latest_seen_iso
+            )
+
             duration_seconds = int(time.time() - start_time)
             self.record_sync_history(
                 sync_session_id=sync_session_id,
@@ -808,8 +1045,11 @@ class GitHubSyncService:
                 duration_seconds=duration_seconds,
                 status='success'
             )
-            
-            logger.info(f"Successfully synced {issues_new + issues_updated} issues for {repo_name} (new: {issues_new}, updated: {issues_updated})")
+
+            logger.info(
+                f"Successfully synced {issues_new + issues_updated} issues for {repo_name} "
+                f"(new: {issues_new}, updated: {issues_updated})"
+            )
             return {
                 "success": True,
                 "repository": repo_name,
@@ -819,11 +1059,10 @@ class GitHubSyncService:
                 "total_items": len(issues_data),
                 "count": issues_new + issues_updated
             }
-            
-        except Exception as e:
-            logger.error(f"Error syncing issues for {repo_name}: {e}")
-            
-            # Record sync history for error
+
+        except Exception as exc:
+            logger.error(f"Error syncing issues for {repo_name}: {exc}")
+
             duration_seconds = int(time.time() - start_time)
             self.record_sync_history(
                 sync_session_id=sync_session_id,
@@ -831,12 +1070,18 @@ class GitHubSyncService:
                 sync_type='issues',
                 duration_seconds=duration_seconds,
                 status='error',
-                error_message=str(e)
+                error_message=str(exc)
             )
-            
-            # Record sync history for error - REMOVED broken sync_metadata insert
-            
-            return {"success": False, "error": str(e), "repository": repo_name}
+
+            self._update_sync_metadata(
+                repository=repo_name,
+                sync_type='issues',
+                status='error',
+                items_synced=0,
+                error_message=str(exc)
+            )
+
+            return {"success": False, "error": str(exc), "repository": repo_name}
     
     def sync_repository_prs(self, repo_name: str, sync_session_id: str = None) -> Dict[str, Any]:
         """Sync pull requests for a specific repository"""
@@ -844,7 +1089,6 @@ class GitHubSyncService:
             logger.error("requests module not available - cannot sync PRs")
             return {"success": False, "error": "requests module not available"}
         
-        # Generate session ID if not provided
         if sync_session_id is None:
             sync_session_id = str(uuid4())
         
@@ -855,6 +1099,11 @@ class GitHubSyncService:
             
             # Get repository-specific filters
             repo_filters = self.get_repository_filters(repo_name)
+
+            last_sync_iso = self._get_last_sync_timestamp(repo_name, 'pull_requests')
+            if last_sync_iso:
+                logger.info(f"Last successful PR sync for {repo_name}: {last_sync_iso}")
+            headers = self._build_conditional_headers(last_sync_iso)
             
             url = f"{self.base_url}/repos/{repo_name}/pulls"
             
@@ -868,10 +1117,49 @@ class GitHubSyncService:
             
             logger.info(f"GitHub API request params for PRs: {params}")
             
-            response = requests.get(url, headers=self.headers, params=params, timeout=30)
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+
+            if response.status_code == 304:
+                logger.info(f"No new pull requests for {repo_name} since {last_sync_iso}")
+                duration_seconds = int(time.time() - start_time)
+                self._update_sync_metadata(
+                    repository=repo_name,
+                    sync_type='pull_requests',
+                    status='not_modified',
+                    items_synced=0,
+                    last_synced_at=last_sync_iso
+                )
+                self.record_sync_history(
+                    sync_session_id=sync_session_id,
+                    repository=repo_name,
+                    sync_type='pull_requests',
+                    prs_new=0,
+                    prs_updated=0,
+                    prs_total=0,
+                    duration_seconds=duration_seconds,
+                    status='success'
+                )
+                return {
+                    "success": True,
+                    "repository": repo_name,
+                    "prs_synced": 0,
+                    "prs_new": 0,
+                    "prs_updated": 0,
+                    "total_items": 0,
+                    "count": 0
+                }
             response.raise_for_status()
             
             prs_data = response.json()
+            
+            latest_seen_dt = self._parse_iso_datetime(last_sync_iso)
+            latest_seen_iso = last_sync_iso
+            for pr_item in prs_data:
+                updated_iso = pr_item.get('updated_at')
+                updated_dt = self._parse_iso_datetime(updated_iso)
+                if updated_dt and (latest_seen_dt is None or updated_dt > latest_seen_dt):
+                    latest_seen_dt = updated_dt
+                    latest_seen_iso = updated_iso
             
             # Apply exclude filters
             filtered_prs = []
@@ -943,12 +1231,20 @@ class GitHubSyncService:
                 except Exception as e:
                     logger.error(f"Error processing PR {pr['number']}: {e}")
             
-            # Update sync metadata using existing schema - REMOVED broken sync_metadata inserts  
-            # Using sync_history table instead for tracking sync status
-            
             conn.commit()
             conn.close()
             
+            if latest_seen_iso is None:
+                latest_seen_iso = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+
+            self._update_sync_metadata(
+                repository=repo_name,
+                sync_type='pull_requests',
+                status='success',
+                items_synced=prs_new + prs_updated,
+                last_synced_at=latest_seen_iso
+            )
+
             # Record sync history
             duration_seconds = int(time.time() - start_time)
             self.record_sync_history(
@@ -987,8 +1283,14 @@ class GitHubSyncService:
                 error_message=str(e)
             )
             
-            # Record sync history for error - REMOVED broken sync_metadata insert
-            
+            self._update_sync_metadata(
+                repository=repo_name,
+                sync_type='pull_requests',
+                status='error',
+                items_synced=0,
+                error_message=str(e)
+            )
+
             return {"success": False, "error": str(e), "repository": repo_name}
     
     def get_sync_status(self) -> Dict[str, Any]:

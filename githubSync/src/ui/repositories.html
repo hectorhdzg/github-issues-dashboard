@@ -23,6 +23,7 @@
         .priority-high { border-left: 4px solid #dc3545; }
         .priority-medium { border-left: 4px solid #ffc107; }
         .priority-low { border-left: 4px solid #28a745; }
+        .priority-custom { border-left: 4px solid #6c757d; }
     </style>
 </head>
 <body>
@@ -71,21 +72,49 @@
                 </div>
                 <div class="modal-body">
                     <form id="add-repo-form">
-                        <div class="mb-3">
-                            <label for="repoOwner" class="form-label">Repository Owner</label>
-                            <input type="text" class="form-control" id="repoOwner" placeholder="e.g., microsoft" required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="repoName" class="form-label">Repository Name</label>
-                            <input type="text" class="form-control" id="repoName" placeholder="e.g., vscode" required>
-                        </div>
-                        <div class="mb-3">
-                            <label for="repoPriority" class="form-label">Priority</label>
-                            <select class="form-control" id="repoPriority">
-                                <option value="low">Low</option>
-                                <option value="medium" selected>Medium</option>
-                                <option value="high">High</option>
-                            </select>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label for="repoOwner" class="form-label">Repository Owner</label>
+                                <input type="text" class="form-control" id="repoOwner" placeholder="e.g., microsoft" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="repoName" class="form-label">Repository Name</label>
+                                <input type="text" class="form-control" id="repoName" placeholder="e.g., vscode" required>
+                            </div>
+                            <div class="col-12">
+                                <label for="repoDisplayName" class="form-label">Display Name</label>
+                                <input type="text" class="form-control" id="repoDisplayName" placeholder="Shown within the dashboard (optional)">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="repoCategory" class="form-label">Main Category</label>
+                                <input type="text" class="form-control" id="repoCategory" placeholder="e.g., Azure SDK" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="repoClassification" class="form-label">Language Classification</label>
+                                <select class="form-control" id="repoClassification">
+                                    <option value="JavaScript">JavaScript / TypeScript</option>
+                                    <option value="DotNet">.NET</option>
+                                    <option value="Python">Python</option>
+                                    <option value="Java">Java</option>
+                                    <option value="Other" selected>Other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="repoPriority" class="form-label">Priority</label>
+                                <select class="form-control" id="repoPriority">
+                                    <option value="1">High</option>
+                                    <option value="2" selected>Medium</option>
+                                    <option value="3">Low</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6 d-flex align-items-end">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="repoActive" checked>
+                                    <label class="form-check-label" for="repoActive">
+                                        Active (included in scheduled syncs)
+                                    </label>
+                                </div>
+                            </div>
                         </div>
                     </form>
                 </div>
