@@ -1,9 +1,0 @@
-Flask==3.0.3
-requests==2.31.0
-gunicorn==23.0.0
-
-# Test dependencies
-pytest==7.4.3
-pytest-mock==3.12.0
-coverage==7.3.2
-unittest-xml-reporting==3.2.0
