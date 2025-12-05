@@ -1,0 +1,13 @@
+{
+    "python.defaultInterpreterPath": "./.venv/Scripts/python.exe",
+    "python.terminal.activateEnvironment": true,
+    "files.watcherExclude": {
+        "**/data/**": true,
+        "**/__pycache__/**": true
+    },
+    "terminal.integrated.env.windows": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+    },
+    "tasks.autoDetect": "on",
+    "terminal.integrated.defaultProfile.windows": "PowerShell"
+}
